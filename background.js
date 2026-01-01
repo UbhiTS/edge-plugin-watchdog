@@ -5,6 +5,11 @@ let creatingOffscreen = false;
 // In-memory timers for each tab (one timer per tab, uses shortest interval)
 const refreshTimers = new Map();
 
+// Watchdog timer to detect stuck refreshes
+let stuckWatchdogTimer = null;
+const STUCK_THRESHOLD_MS = 30000; // Consider stuck if 30 seconds past expected refresh
+const WATCHDOG_CHECK_INTERVAL_MS = 10000; // Check every 10 seconds
+
 // Generate unique ID
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -186,6 +191,97 @@ async function scheduleRefreshForTab(tabId) {
   }, intervalMs);
   
   refreshTimers.set(tabId, timer);
+  
+  // Start the stuck watchdog if not already running
+  startStuckWatchdog();
+}
+
+// Check for stuck monitors and force refresh if needed
+async function checkForStuckMonitors() {
+  const monitors = await getMonitors();
+  const now = Date.now();
+  const tabsToRefresh = new Set();
+  
+  for (const [id, monitor] of Object.entries(monitors)) {
+    // Only check active (not found) monitors with a nextRefreshTime set
+    if (!monitor.found && monitor.nextRefreshTime) {
+      const timeSinceExpected = now - monitor.nextRefreshTime;
+      
+      if (timeSinceExpected > STUCK_THRESHOLD_MS) {
+        console.log('Monitor appears stuck:', id, 'Expected refresh was', Math.round(timeSinceExpected / 1000), 'seconds ago');
+        tabsToRefresh.add(monitor.tabId);
+      }
+    }
+  }
+  
+  // Force refresh stuck tabs
+  for (const tabId of tabsToRefresh) {
+    try {
+      await chrome.tabs.get(tabId);
+      console.log('Force refreshing stuck tab:', tabId);
+      
+      // Update nextRefreshTime before refreshing to prevent repeated force refreshes
+      const currentMonitors = await getMonitors();
+      const activeForTab = await getActiveMonitorsForTab(tabId);
+      
+      // Find shortest interval for this tab
+      let shortestInterval = 15;
+      for (const monitor of Object.values(activeForTab)) {
+        if (monitor.interval < shortestInterval) {
+          shortestInterval = monitor.interval;
+        }
+      }
+      
+      const newNextRefreshTime = Date.now() + (shortestInterval * 1000) + 5000; // Add 5s buffer
+      for (const [id, monitor] of Object.entries(currentMonitors)) {
+        if (monitor.tabId === tabId && !monitor.found) {
+          currentMonitors[id].nextRefreshTime = newNextRefreshTime;
+        }
+      }
+      await saveMonitors(currentMonitors);
+      
+      // Reload the tab
+      chrome.tabs.reload(tabId);
+    } catch (e) {
+      console.log('Stuck tab no longer exists, cleaning up:', tabId);
+      const currentMonitors = await getMonitors();
+      for (const [id, monitor] of Object.entries(currentMonitors)) {
+        if (monitor.tabId === tabId) {
+          delete currentMonitors[id];
+        }
+      }
+      await saveMonitors(currentMonitors);
+      clearTabTimer(tabId);
+    }
+  }
+}
+
+// Start the watchdog timer
+function startStuckWatchdog() {
+  if (stuckWatchdogTimer) return; // Already running
+  
+  console.log('Starting stuck monitor watchdog');
+  stuckWatchdogTimer = setInterval(async () => {
+    const monitors = await getMonitors();
+    const hasActiveMonitors = Object.values(monitors).some(m => !m.found);
+    
+    if (!hasActiveMonitors) {
+      console.log('No active monitors, stopping watchdog');
+      stopStuckWatchdog();
+      return;
+    }
+    
+    await checkForStuckMonitors();
+  }, WATCHDOG_CHECK_INTERVAL_MS);
+}
+
+// Stop the watchdog timer
+function stopStuckWatchdog() {
+  if (stuckWatchdogTimer) {
+    clearInterval(stuckWatchdogTimer);
+    stuckWatchdogTimer = null;
+    console.log('Stopped stuck monitor watchdog');
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -261,6 +357,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await chrome.tabs.sendMessage(tabId, { action: 'dismissOverlay' });
         } catch (e) {}
       }
+      
+      // Stop the stuck watchdog
+      stopStuckWatchdog();
       
       await saveMonitors({});
       console.log('All monitoring stopped');
@@ -438,10 +537,12 @@ chrome.runtime.onStartup.addListener(async () => {
   console.log('Service worker starting up, restoring timers...');
   const monitors = await getMonitors();
   const tabIds = new Set();
+  let hasActiveMonitors = false;
   
   for (const monitor of Object.values(monitors)) {
     if (!monitor.found) {
       tabIds.add(monitor.tabId);
+      hasActiveMonitors = true;
     }
   }
   
@@ -460,4 +561,9 @@ chrome.runtime.onStartup.addListener(async () => {
   }
   
   await saveMonitors(monitors);
+  
+  // Start the stuck watchdog if there are active monitors
+  if (hasActiveMonitors) {
+    startStuckWatchdog();
+  }
 });
