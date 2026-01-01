@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentTabUrl = '';
   let currentTabTitle = '';
   let updateInterval = null;
+  let initialFocusDone = false;
 
   console.log('Popup loaded');
 
@@ -54,9 +55,10 @@ document.addEventListener('DOMContentLoaded', () => {
         addBtn.disabled = false;
         addBtn.textContent = tabMonitorCount > 0 ? 'Add Another Monitor' : 'Start Monitoring';
         
-        // Focus search if no text entered
-        if (!searchTextInput.value) {
+        // Only focus on initial load, not on subsequent updates
+        if (!initialFocusDone && !searchTextInput.value) {
           searchTextInput.focus();
+          initialFocusDone = true;
         }
       });
     } catch (err) {

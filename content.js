@@ -104,6 +104,7 @@ function showVisualAlert(searchText, monitorId) {
   const foundText = searchText || 'Search text';
   const now = new Date();
   const foundTime = now.toLocaleString();
+  const iconUrl = chrome.runtime.getURL('icon128.png');
   
   // Check if overlay already exists
   if (document.getElementById('watchdog-alert-overlay')) {
@@ -113,7 +114,7 @@ function showVisualAlert(searchText, monitorId) {
       const item = document.createElement('div');
       item.style.cssText = 'margin-top: 15px; padding: 15px 30px; background: #00dd00; border-radius: 10px;';
       item.innerHTML = `
-        <div style="font-size: 24px;">🎉 "${foundText}"</div>
+        <div style="font-size: 24px;">🐕 "${foundText}"</div>
         <div style="font-size: 14px; margin-top: 5px;">Found at: ${foundTime}</div>
       `;
       container.appendChild(item);
@@ -142,6 +143,21 @@ function showVisualAlert(searchText, monitorId) {
       cursor: pointer;
     ">
       <div style="
+        position: absolute;
+        top: 20px;
+        right: 30px;
+        font-size: 36px;
+        color: #000;
+        background: rgba(255,255,255,0.8);
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-weight: bold;
+      ">✕</div>
+      <div style="
         background: #00ff00;
         color: #000;
         padding: 40px 60px;
@@ -152,24 +168,14 @@ function showVisualAlert(searchText, monitorId) {
         box-shadow: 0 0 50px #00ff00;
         max-width: 80%;
       ">
-        🚨 FOUND! 🚨
+        <img src="${iconUrl}" style="width: 48px; height: 48px; vertical-align: middle;"> FOUND!
         <div id="watchdog-found-container" style="margin-top: 20px;">
           <div style="padding: 15px 30px; background: #00dd00; border-radius: 10px;">
-            <div style="font-size: 24px;">🎉 "${foundText}"</div>
+            <div style="font-size: 24px;">🐕 "${foundText}"</div>
             <div style="font-size: 14px; margin-top: 5px;">Found at: ${foundTime}</div>
           </div>
         </div>
-        <div style="font-size: 24px; margin-top: 20px;">GO GO GO!</div>
-      </div>
-      <div style="
-        margin-top: 30px;
-        color: #000;
-        font-size: 18px;
-        background: rgba(255,255,255,0.8);
-        padding: 10px 20px;
-        border-radius: 10px;
-      ">
-        👆 Click anywhere to dismiss and stop alarm
+        <div style="font-size: 24px; margin-top: 20px;">Woof! Your watch is over! 🦴</div>
       </div>
     </div>
   `;
