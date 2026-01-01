@@ -160,19 +160,23 @@ function showVisualAlert(searchText, monitorId) {
       0%, 100% { transform: translateY(0); }
       50% { transform: translateY(-5px); }
     }
+    @keyframes watchdog-bg-pulse {
+      0%, 100% { background-color: rgba(118, 185, 0, 0.35); }
+      50% { background-color: rgba(200, 230, 0, 0.5); }
+    }
     .watchdog-overlay-bg {
       position: fixed;
       top: 0;
       left: 0;
       width: 100%;
       height: 100%;
-      background: linear-gradient(135deg, rgba(118, 185, 0, 0.85) 0%, rgba(76, 175, 80, 0.9) 100%);
-      backdrop-filter: blur(8px);
+      background-color: rgba(118, 185, 0, 0.35);
       z-index: 2147483647;
       display: flex;
       justify-content: center;
       align-items: center;
       cursor: pointer;
+      animation: watchdog-bg-pulse 0.5s ease-in-out infinite alternate;
     }
     .watchdog-close-btn {
       position: absolute;

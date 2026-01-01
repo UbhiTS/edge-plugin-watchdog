@@ -194,7 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <div class="monitor-header">
                 <span class="monitor-search-text">"${escapeHtml(monitor.searchText)}"</span>
                 <span class="monitor-status ${isFound ? 'found' : 'active'}">
-                  ${isFound ? '🎉 FOUND!' : '🔄 Active'}
+                  ${isFound ? '🦴 FOUND!' : '🔄 Active'}
                 </span>
               </div>
               <div class="monitor-footer">
