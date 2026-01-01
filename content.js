@@ -112,10 +112,10 @@ function showVisualAlert(searchText, monitorId) {
     const container = document.getElementById('watchdog-found-container');
     if (container) {
       const item = document.createElement('div');
-      item.style.cssText = 'margin-top: 15px; padding: 15px 30px; background: #00dd00; border-radius: 10px;';
+      item.className = 'watchdog-found-item';
       item.innerHTML = `
-        <div style="font-size: 24px;">🐕 "${foundText}"</div>
-        <div style="font-size: 14px; margin-top: 5px;">Found at: ${foundTime}</div>
+        <div class="watchdog-found-text">🐕 "${foundText}"</div>
+        <div class="watchdog-found-time">Found at: ${foundTime}</div>
       `;
       container.appendChild(item);
     }
@@ -127,55 +127,20 @@ function showVisualAlert(searchText, monitorId) {
   overlay.id = 'watchdog-alert-overlay';
   overlay.className = 'watchdog-alert-overlay';
   overlay.innerHTML = `
-    <div style="
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 255, 0, 0.3);
-      z-index: 2147483647;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      flex-direction: column;
-      animation: watchdog-flash 0.5s infinite alternate;
-      cursor: pointer;
-    ">
-      <div style="
-        position: absolute;
-        top: 20px;
-        right: 30px;
-        font-size: 36px;
-        color: #000;
-        background: rgba(255,255,255,0.8);
-        width: 50px;
-        height: 50px;
-        border-radius: 50%;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        font-weight: bold;
-      ">✕</div>
-      <div style="
-        background: #00ff00;
-        color: #000;
-        padding: 40px 60px;
-        border-radius: 20px;
-        font-size: 36px;
-        font-weight: bold;
-        text-align: center;
-        box-shadow: 0 0 50px #00ff00;
-        max-width: 80%;
-      ">
-        <img src="${iconUrl}" style="width: 48px; height: 48px; vertical-align: middle;"> FOUND!
-        <div id="watchdog-found-container" style="margin-top: 20px;">
-          <div style="padding: 15px 30px; background: #00dd00; border-radius: 10px;">
-            <div style="font-size: 24px;">🐕 "${foundText}"</div>
-            <div style="font-size: 14px; margin-top: 5px;">Found at: ${foundTime}</div>
+    <div class="watchdog-overlay-bg">
+      <div class="watchdog-close-btn">✕</div>
+      <div class="watchdog-card">
+        <div class="watchdog-header">
+          <img src="${iconUrl}" class="watchdog-icon"> 
+          <span class="watchdog-title">FOUND!</span>
+        </div>
+        <div id="watchdog-found-container">
+          <div class="watchdog-found-item">
+            <div class="watchdog-found-text">🐕 "${foundText}"</div>
+            <div class="watchdog-found-time">Found at: ${foundTime}</div>
           </div>
         </div>
-        <div style="font-size: 24px; margin-top: 20px;">Woof! Your watch is over! 🦴</div>
+        <div class="watchdog-footer">Woof! Your watch is over! 🦴</div>
       </div>
     </div>
   `;
@@ -183,9 +148,119 @@ function showVisualAlert(searchText, monitorId) {
   const style = document.createElement('style');
   style.className = 'watchdog-alert-style';
   style.textContent = `
-    @keyframes watchdog-flash {
-      from { background: rgba(0, 255, 0, 0.3); }
-      to { background: rgba(255, 255, 0, 0.5); }
+    @keyframes watchdog-pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.02); }
+    }
+    @keyframes watchdog-glow {
+      0%, 100% { box-shadow: 0 0 40px rgba(118, 185, 0, 0.6), 0 20px 60px rgba(0, 0, 0, 0.3); }
+      50% { box-shadow: 0 0 60px rgba(118, 185, 0, 0.8), 0 20px 60px rgba(0, 0, 0, 0.3); }
+    }
+    @keyframes watchdog-bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-5px); }
+    }
+    .watchdog-overlay-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, rgba(118, 185, 0, 0.85) 0%, rgba(76, 175, 80, 0.9) 100%);
+      backdrop-filter: blur(8px);
+      z-index: 2147483647;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+    }
+    .watchdog-close-btn {
+      position: absolute;
+      top: 24px;
+      right: 32px;
+      font-size: 24px;
+      color: rgba(0, 0, 0, 0.6);
+      background: rgba(255, 255, 255, 0.9);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: 300;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      transition: all 0.2s ease;
+    }
+    .watchdog-close-btn:hover {
+      background: #fff;
+      color: #000;
+      transform: scale(1.1);
+    }
+    .watchdog-card {
+      background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
+      border-radius: 24px;
+      padding: 48px 56px;
+      text-align: center;
+      max-width: 500px;
+      min-width: 380px;
+      animation: watchdog-pulse 2s ease-in-out infinite, watchdog-glow 2s ease-in-out infinite;
+      box-shadow: 0 0 40px rgba(118, 185, 0, 0.6), 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+    .watchdog-header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .watchdog-icon {
+      width: 56px;
+      height: 56px;
+      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2));
+      animation: watchdog-bounce 1s ease-in-out infinite;
+    }
+    .watchdog-title {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 42px;
+      font-weight: 800;
+      color: #2d5016;
+      letter-spacing: -1px;
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    #watchdog-found-container {
+      margin: 24px 0;
+    }
+    .watchdog-found-item {
+      background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+      border: 2px solid rgba(118, 185, 0, 0.3);
+      border-radius: 16px;
+      padding: 20px 28px;
+      margin-top: 12px;
+    }
+    .watchdog-found-item:first-child {
+      margin-top: 0;
+    }
+    .watchdog-found-text {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 22px;
+      font-weight: 600;
+      color: #1b5e20;
+    }
+    .watchdog-found-time {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      color: #558b2f;
+      margin-top: 8px;
+      font-weight: 500;
+    }
+    .watchdog-footer {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 18px;
+      font-weight: 600;
+      color: #33691e;
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 2px solid rgba(118, 185, 0, 0.2);
     }
   `;
   document.head.appendChild(style);

@@ -299,12 +299,11 @@
       overflow-y: auto;
     }
     .history-card {
-      background: rgba(255,255,255,0.03);
+      background: rgba(255,255,255,0.05);
       border-radius: 8px;
       padding: 8px 10px;
       margin-bottom: 6px;
-      border-left: 3px solid #888;
-      opacity: 0.8;
+      border-left: 3px solid #999;
     }
     .history-header {
       display: flex;
@@ -315,14 +314,21 @@
     .history-search-text {
       font-size: 12px;
       font-weight: bold;
-      color: #aaa;
+      color: #ddd;
       flex: 1;
       word-break: break-word;
     }
     .history-time {
       font-size: 10px;
-      color: #666;
+      color: #aaa;
       margin-bottom: 4px;
+    }
+    .history-url {
+      font-size: 10px;
+      color: #999;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .history-footer {
       display: flex;
