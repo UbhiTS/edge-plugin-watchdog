@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 380px;
+      padding: 15px;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      margin: 0;
+    }
+    h1 {
+      font-size: 16px;
+      margin: 0 0 12px 0;
+      text-align: center;
+      color: #76b900;
+    }
+    
+    /* Add new monitor section */
+    .add-section {
+      background: rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 15px;
+    }
+    .add-section h2 {
+      font-size: 13px;
+      margin: 0 0 10px 0;
+      color: #aaa;
+    }
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .input-row input[type="text"] {
+      flex: 1;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 5px;
+      background: #2a2a4a;
+      color: #fff;
+      font-size: 13px;
+    }
+    .input-row input[type="text"]::placeholder {
+      color: #666;
+    }
+    .input-row select {
+      padding: 8px;
+      border: none;
+      border-radius: 5px;
+      background: #2a2a4a;
+      color: #fff;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .add-btn {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      background: #76b900;
+      color: #fff;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .add-btn:hover {
+      background: #8ed600;
+    }
+    .add-btn:disabled {
+      background: #444;
+      cursor: not-allowed;
+    }
+    
+    /* Monitors list */
+    .monitors-section {
+      margin-bottom: 10px;
+    }
+    .monitors-section h2 {
+      font-size: 13px;
+      margin: 0 0 10px 0;
+      color: #aaa;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .stop-all-btn {
+      padding: 4px 10px;
+      border: none;
+      border-radius: 4px;
+      background: #ff4444;
+      color: #fff;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .stop-all-btn:hover {
+      background: #ff6666;
+    }
+    
+    .monitors-list {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .no-monitors {
+      text-align: center;
+      padding: 20px;
+      color: #666;
+      font-size: 13px;
+    }
+    
+    /* Tab group container */
+    .tab-group {
+      background: rgba(255,255,255,0.03);
+      border-radius: 10px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .tab-group-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: rgba(255,255,255,0.05);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .tab-group-title {
+      font-size: 11px;
+      color: #888;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
+    .tab-group-actions {
+      display: flex;
+      gap: 6px;
+      margin-left: 8px;
+    }
+    .tab-group-btn {
+      padding: 3px 8px;
+      border: none;
+      border-radius: 4px;
+      font-size: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .tab-group-btn.focus {
+      background: #4488ff;
+      color: #fff;
+    }
+    .tab-group-btn.focus:hover {
+      background: #66aaff;
+    }
+    .tab-group-monitors {
+      padding: 8px;
+    }
+    
+    /* Individual monitor card */
+    .monitor-card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      border-left: 3px solid #76b900;
+    }
+    .monitor-card.found {
+      border-left-color: #00ff00;
+      background: rgba(0, 255, 0, 0.1);
+    }
+    .monitor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 6px;
+    }
+    .monitor-search-text {
+      font-size: 13px;
+      font-weight: bold;
+      color: #fff;
+      flex: 1;
+      word-break: break-word;
+    }
+    .monitor-status {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-left: 8px;
+      white-space: nowrap;
+    }
+    .monitor-status.active {
+      background: #76b900;
+      color: #fff;
+    }
+    .monitor-status.found {
+      background: #00ff00;
+      color: #000;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+    .monitor-url {
+      font-size: 11px;
+      color: #888;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 6px;
+    }
+    .monitor-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .monitor-countdown {
+      font-size: 12px;
+      color: #76b900;
+    }
+    .monitor-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .monitor-btn {
+      padding: 4px 10px;
+      border: none;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .monitor-btn.stop {
+      background: #ff4444;
+      color: #fff;
+    }
+    .monitor-btn.stop:hover {
+      background: #ff6666;
+    }
+    .monitor-btn.focus {
+      background: #4488ff;
+      color: #fff;
+    }
+    .monitor-btn.focus:hover {
+      background: #66aaff;
+    }
+    .monitor-btn.close {
+      background: #666;
+      color: #fff;
+    }
+    .monitor-btn.close:hover {
+      background: #888;
+    }
+    
+    .current-tab-info {
+      text-align: center;
+      padding: 8px;
+      background: rgba(118, 185, 0, 0.1);
+      border-radius: 6px;
+      margin-bottom: 10px;
+      font-size: 11px;
+      color: #888;
+    }
+    .current-tab-info.monitoring {
+      color: #76b900;
+    }
+    
+    /* History section */
+    .history-section {
+      margin-top: 15px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      padding-top: 12px;
+    }
+    .history-section h2 {
+      font-size: 13px;
+      margin: 0 0 10px 0;
+      color: #aaa;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .clear-history-btn {
+      padding: 4px 10px;
+      border: none;
+      border-radius: 4px;
+      background: #666;
+      color: #fff;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .clear-history-btn:hover {
+      background: #888;
+    }
+    .history-list {
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .history-card {
+      background: rgba(255,255,255,0.03);
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      border-left: 3px solid #888;
+      opacity: 0.8;
+    }
+    .history-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 4px;
+    }
+    .history-search-text {
+      font-size: 12px;
+      font-weight: bold;
+      color: #aaa;
+      flex: 1;
+      word-break: break-word;
+    }
+    .history-time {
+      font-size: 10px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+    .history-footer {
+      display: flex;
+      justify-content: flex-end;
+    }
+  </style>
+</head>
+<body>
+  <h1>🐕 Watch Dog</h1>
+  
+  <div id="currentTabInfo" class="current-tab-info">
+    Loading current tab info...
+  </div>
+  
+  <div class="add-section">
+    <div class="input-row">
+      <input type="text" id="searchText" placeholder="Search text (e.g., RTX 5090)">
+    </div>
+    <div class="input-row">
+      <select id="interval">
+        <option value="15" selected>15 sec</option>
+        <option value="30">30 sec</option>
+        <option value="60">1 min</option>
+        <option value="120">2 min</option>
+        <option value="300">5 min</option>
+      </select>
+      <button id="addBtn" class="add-btn">Start Monitoring</button>
+    </div>
+  </div>
+  
+  <div class="monitors-section" id="monitorsSection" style="display: none;">
+    <h2>
+      <span>📋 Active Monitors (<span id="monitorCount">0</span>)</span>
+      <button id="stopAllBtn" class="stop-all-btn">Stop All</button>
+    </h2>
+    <div id="monitorsList" class="monitors-list">
+    </div>
+  </div>
+  
+  <div class="history-section" id="historySection" style="display: none;">
+    <h2>
+      <span>📜 History (<span id="historyCount">0</span>)</span>
+      <button id="clearHistoryBtn" class="clear-history-btn">Clear All</button>
+    </h2>
+    <div id="historyList" class="history-list">
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
