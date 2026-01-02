@@ -9,9 +9,12 @@ A browser extension that monitors web pages for specific text and alerts you wit
 - ⏱️ **Configurable Refresh** - Choose refresh intervals from 15 seconds to 5 minutes
 - 📑 **Multi-Tab Support** - Monitor multiple pages simultaneously
 - 🔢 **Multiple Monitors Per Tab** - Watch for different text strings on the same page
+- 🕵️ **InPrivate Mode** - Bypass rate limiting by opening monitors in InPrivate windows
+- 🔄 **Smart Backoff** - Automatic exponential backoff when websites throttle requests
 - 🎨 **Visual Alerts** - Bright overlay notification when text is detected
 - 📜 **History Tracking** - See when and where text was found
 - ⏳ **Countdown Timer** - See when the next refresh will happen
+- 🎯 **Focus Button** - Bring any monitored window to the front instantly
 
 ## Installation
 
@@ -37,6 +40,27 @@ A browser extension that monitors web pages for specific text and alerts you wit
 - Monitor multiple tabs at once for comprehensive tracking
 - Click "Dismiss" on any alert to stop the sound
 - Use "Stop All" to stop monitoring everything at once
+
+### InPrivate Mode
+
+Some websites (like NVIDIA's store) implement rate limiting that can block or throttle frequent page refreshes. The InPrivate feature helps bypass these restrictions:
+
+1. Click the **🕵️ InPrivate** button on any active monitor
+2. The monitor will close the current tab and reopen in an InPrivate window
+3. InPrivate windows don't share cookies/sessions, helping avoid rate limits
+4. The InPrivate badge shows next to the monitor status
+
+### Smart Backoff
+
+When a website returns an error page (throttling, "Access Denied", etc.), Watch Dog automatically:
+
+1. Detects the error using common error patterns
+2. Closes the current InPrivate window
+3. Waits with exponential backoff (5s → 10s → 20s → 40s, up to 2 minutes max)
+4. Opens a fresh InPrivate window and continues monitoring
+5. Shows the backoff countdown in the popup (e.g., "⏳ Backoff #3")
+
+This prevents aggressive retries that could get you temporarily banned.
 
 ## Adding a Custom Sound
 
