@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const historyList = document.getElementById('historyList');
   const historyCount = document.getElementById('historyCount');
   const clearHistoryBtn = document.getElementById('clearHistoryBtn');
-  
+
   let currentTabId = null;
   let currentTabUrl = '';
   let currentTabTitle = '';
@@ -39,18 +39,6 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
         
-        const displayUrl = currentTabUrl.length > 50 
-          ? currentTabUrl.substring(0, 50) + '...' 
-          : currentTabUrl;
-        
-        if (tabMonitorCount > 0) {
-          currentTabInfo.textContent = `✓ ${tabMonitorCount} monitor(s) on this tab`;
-          currentTabInfo.className = 'current-tab-info monitoring';
-        } else {
-          currentTabInfo.textContent = 'Current: ' + displayUrl;
-          currentTabInfo.className = 'current-tab-info';
-        }
-        
         // Always enable the button - can add multiple monitors per tab
         addBtn.disabled = false;
         addBtn.textContent = tabMonitorCount > 0 ? 'Add Another Monitor' : 'Start Monitoring';
@@ -63,7 +51,6 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     } catch (err) {
       console.error('Error getting current tab:', err);
-      currentTabInfo.textContent = 'Could not get tab info';
     }
   }
   
@@ -173,12 +160,14 @@ document.addEventListener('DOMContentLoaded', () => {
         html += `<div class="tab-group">`;
         html += `<div class="tab-header" title="${escapeHtml(firstMonitor.url || '')}">
           🌐 ${escapeHtml(displayUrl)}
-          <button class="monitor-btn focus tab-focus-btn" data-tab-id="${tabId}">Focus</button>
         </div>`;
         
         // Individual monitors for this tab
         for (const monitor of tabMonitors) {
           const isFound = monitor.found;
+          const isIncognito = monitor.isIncognito;
+          const cycleCount = monitor.incognitoCycleCount || 0;
+          const inBackoff = monitor.inBackoff || false;
           
           let countdownText = '';
           if (isFound && monitor.foundAt) {
@@ -186,20 +175,48 @@ document.addEventListener('DOMContentLoaded', () => {
             countdownText = `📅 ${foundDate.toLocaleString()}`;
           } else if (!isFound && monitor.nextRefreshTime) {
             const remaining = Math.max(0, Math.ceil((monitor.nextRefreshTime - Date.now()) / 1000));
-            countdownText = remaining > 0 ? `⏱️ ${remaining}s` : '🔄 Refreshing...';
+            if (remaining > 0) {
+              countdownText = inBackoff ? `⏳ Backoff ${remaining}s` : `⏱️ ${remaining}s`;
+            } else {
+              countdownText = '🔄 Refreshing...';
+            }
           }
           
+          // InPrivate badge - show when in InPrivate mode (even when found)
+          let inPrivateBadge = '';
+          if (isIncognito) {
+            inPrivateBadge = `<span class="monitor-status inprivate-badge">${cycleCount > 1 ? `🕵️ #${cycleCount}` : '🕵️ InPrivate'}</span>`;
+          } else if (inBackoff) {
+            inPrivateBadge = `<span class="monitor-status inprivate-badge">⏳ Backoff #${cycleCount}</span>`;
+          }
+          
+          // Found badge - only show when text is found
+          const foundBadge = isFound 
+            ? `<span class="monitor-status found">🦴 FOUND!</span>`
+            : '';
+          
+          // InPrivate button - only show if not found and not already in InPrivate
+          const inPrivateBtn = (!isFound && !isIncognito) 
+            ? `<button class="monitor-btn inprivate" data-monitor-id="${monitor.id}">🕵️ InPrivate</button>`
+            : '';
+          
+          // Focus button
+          const focusBtn = `<button class="monitor-btn focus tab-focus-btn" data-tab-id="${monitor.tabId}">Focus</button>`;
+          
           html += `
-            <div class="monitor-card ${isFound ? 'found' : ''}">
+            <div class="monitor-card ${isFound ? 'found' : ''}${isIncognito ? ' incognito' : ''}">
               <div class="monitor-header">
                 <span class="monitor-search-text">"${escapeHtml(monitor.searchText)}"</span>
-                <span class="monitor-status ${isFound ? 'found' : 'active'}">
-                  ${isFound ? '🦴 FOUND!' : '🔄 Active'}
-                </span>
+                <div class="monitor-badges">
+                  ${inPrivateBadge}
+                  ${foundBadge}
+                </div>
               </div>
               <div class="monitor-footer">
                 <span class="monitor-countdown">${countdownText}</span>
                 <div class="monitor-actions">
+                  ${inPrivateBtn}
+                  ${focusBtn}
                   <button class="monitor-btn stop" data-monitor-id="${monitor.id}" data-found="${isFound}">${isFound ? 'Dismiss' : 'Stop'}</button>
                 </div>
               </div>
@@ -227,11 +244,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       });
       
+      // InPrivate button click handler
+      monitorsList.querySelectorAll('.monitor-btn.inprivate:not(.enabled)').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const monitorId = btn.dataset.monitorId;
+          
+          chrome.runtime.sendMessage({ action: 'enableInPrivate', monitorId }, () => {
+            loadCurrentTab();
+            loadMonitors();
+          });
+        });
+      });
+      
       monitorsList.querySelectorAll('.tab-focus-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const tabId = parseInt(btn.dataset.tabId);
-          chrome.tabs.update(tabId, { active: true });
+          // Get the tab to find its window, then focus both window and tab
+          chrome.tabs.get(tabId, (tab) => {
+            if (tab && tab.windowId) {
+              chrome.windows.update(tab.windowId, { focused: true });
+            }
+            chrome.tabs.update(tabId, { active: true });
+          });
         });
       });
     });
@@ -274,23 +309,11 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
             <div class="history-time">📅 Found: ${foundDate}</div>
             <div class="history-time" title="${escapeHtml(item.url || '')}">${escapeHtml(displayUrl)}</div>
-            <div class="history-footer">
-              <button class="monitor-btn close" data-index="${i}">✕ Close</button>
-            </div>
           </div>
         `;
       }
       
       historyList.innerHTML = html;
-      
-      historyList.querySelectorAll('.monitor-btn.close').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const index = parseInt(btn.dataset.index);
-          chrome.runtime.sendMessage({ action: 'removeFromHistory', index }, () => {
-            loadHistory();
-          });
-        });
-      });
     });
   }
 

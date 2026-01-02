@@ -3,6 +3,53 @@
 let activeMonitors = {}; // { monitorId: { searchText, ... } }
 let foundMonitors = new Set(); // Track which monitors have already found their text
 
+// Error page detection patterns
+const ERROR_PATTERNS = [
+  "can't reach this page",
+  "cannot reach this page",
+  "this site can't be reached",
+  "this page isn't working",
+  "err_connection",
+  "err_http",
+  "err_ssl",
+  "err_timed_out",
+  "err_name_not_resolved",
+  "err_network",
+  "err_failed",
+  "err_aborted",
+  "err_blocked",
+  "connection timed out",
+  "502 bad gateway",
+  "503 service unavailable",
+  "504 gateway timeout",
+  "500 internal server error",
+  "access denied",
+  "too many requests",
+  "rate limit"
+];
+
+function isErrorPage() {
+  const pageText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+  const pageTextLower = pageText.toLowerCase();
+  const titleLower = document.title.toLowerCase();
+  
+  // Check for error patterns in page content or title
+  for (const pattern of ERROR_PATTERNS) {
+    if (pageTextLower.includes(pattern) || titleLower.includes(pattern)) {
+      console.log('[WatchDog] Detected error page pattern:', pattern);
+      return true;
+    }
+  }
+  
+  // Check for very minimal page content (often indicates error)
+  if (pageText.length < 200 && (pageTextLower.includes('error') || pageTextLower.includes('denied'))) {
+    console.log('[WatchDog] Detected minimal page with error keywords');
+    return true;
+  }
+  
+  return false;
+}
+
 function checkAllMonitors() {
   if (Object.keys(activeMonitors).length === 0) {
     console.log('[WatchDog] No active monitors for this tab');
@@ -14,6 +61,16 @@ function checkAllMonitors() {
   if (!pageText) {
     console.log('[WatchDog] No page text found');
     chrome.runtime.sendMessage({ action: 'scheduleRefresh' });
+    return;
+  }
+  
+  // Check if this is an error page (throttling, network error, etc.)
+  if (isErrorPage()) {
+    console.log('[WatchDog] 🚫 Error page detected, requesting InPrivate fallback...');
+    chrome.runtime.sendMessage({ 
+      action: 'errorPageDetected',
+      url: window.location.href
+    });
     return;
   }
   

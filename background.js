@@ -121,6 +121,122 @@ async function getActiveMonitorsForTab(tabId) {
   return result;
 }
 
+// Calculate exponential backoff delay (in ms)
+// Cycle 1: 5s, Cycle 2: 10s, Cycle 3: 20s, Cycle 4: 40s, max 2 minutes
+function getBackoffDelay(cycleCount) {
+  const baseDelay = 5000; // 5 seconds
+  const maxDelay = 120000; // 2 minutes max
+  const delay = Math.min(baseDelay * Math.pow(2, cycleCount - 1), maxDelay);
+  return delay;
+}
+
+// Check if InPrivate fallback is enabled
+async function isInPrivateEnabled() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['useInPrivate'], (result) => {
+      // Default to true if not set
+      resolve(result.useInPrivate !== false);
+    });
+  });
+}
+
+// Handle error page by opening/cycling InPrivate window
+// This will close existing InPrivate windows and open fresh ones
+async function handleErrorWithInPrivate(tabId, url) {
+  // Check if InPrivate fallback is enabled
+  const inPrivateEnabled = await isInPrivateEnabled();
+  if (!inPrivateEnabled) {
+    console.log('InPrivate fallback is disabled, scheduling regular refresh');
+    await scheduleRefreshForTab(tabId);
+    return { status: 'disabled' };
+  }
+  
+  const activeTabMonitors = await getActiveMonitorsForTab(tabId);
+  
+  if (Object.keys(activeTabMonitors).length === 0) {
+    console.log('No active monitors for tab', tabId, ', skipping InPrivate fallback');
+    return { status: 'skipped' };
+  }
+  
+  // Check if the current tab is already an InPrivate tab
+  const firstMonitor = Object.values(activeTabMonitors)[0];
+  const wasAlreadyIncognito = firstMonitor?.isIncognito || false;
+  const cycleCount = (firstMonitor?.incognitoCycleCount || 0) + 1;
+  const lastCycleTime = firstMonitor?.lastCycleTime || 0;
+  
+  // Calculate required delay based on cycle count
+  const requiredDelay = getBackoffDelay(cycleCount);
+  
+  console.log(`InPrivate cycle #${cycleCount} - Previous was incognito: ${wasAlreadyIncognito}, backoff: ${Math.round(requiredDelay/1000)}s`);
+  
+  // FIRST: Close the error tab/window immediately
+  clearTabTimer(tabId);
+  try {
+    if (wasAlreadyIncognito) {
+      const tab = await chrome.tabs.get(tabId);
+      await chrome.windows.remove(tab.windowId);
+      console.log('Closed old InPrivate window');
+    } else {
+      await chrome.tabs.remove(tabId);
+      console.log('Closed original error tab');
+    }
+  } catch (e) {
+    console.log('Could not close old tab/window:', e);
+  }
+  
+  // Update monitors to indicate they're in backoff state (no tab assigned temporarily)
+  const monitors = await getMonitors();
+  for (const [id, monitor] of Object.entries(activeTabMonitors)) {
+    if (monitors[id]) {
+      monitors[id].tabId = -1; // Temporarily no tab
+      monitors[id].isIncognito = true;
+      monitors[id].incognitoCycleCount = cycleCount;
+      monitors[id].lastCycleTime = Date.now();
+      monitors[id].nextRefreshTime = Date.now() + requiredDelay;
+      monitors[id].inBackoff = true;
+    }
+  }
+  await saveMonitors(monitors);
+  
+  // THEN: Wait for backoff period before opening new window
+  console.log(`Backoff: Waiting ${Math.round(requiredDelay/1000)}s before opening new InPrivate window (cycle #${cycleCount})`);
+  
+  setTimeout(async () => {
+    try {
+      // Open a fresh InPrivate window after backoff
+      const newWindow = await chrome.windows.create({
+        url: url,
+        incognito: true,
+        focused: false
+      });
+      
+      const newTabId = newWindow.tabs[0].id;
+      console.log('Opened fresh InPrivate window with tab:', newTabId, 'after backoff, cycle:', cycleCount);
+      
+      // Update monitors with new tab
+      const currentMonitors = await getMonitors();
+      for (const [id, monitor] of Object.entries(activeTabMonitors)) {
+        if (currentMonitors[id]) {
+          currentMonitors[id].tabId = newTabId;
+          currentMonitors[id].url = url;
+          currentMonitors[id].inBackoff = false;
+          currentMonitors[id].nextRefreshTime = Date.now() + (monitor.interval * 1000) + 3000;
+        }
+      }
+      await saveMonitors(currentMonitors);
+      
+      // Schedule refresh for new tab
+      await scheduleRefreshForTab(newTabId);
+      
+      console.log(`Successfully opened new InPrivate tab after backoff (cycle #${cycleCount})`);
+    } catch (e) {
+      console.log('Failed to open InPrivate window after backoff:', e);
+    }
+  }, requiredDelay);
+  
+  return { status: 'backoff-cycling', backoffDelay: requiredDelay, cycleCount };
+}
+
 // Clear timer for a specific tab
 function clearTabTimer(tabId) {
   const timer = refreshTimers.get(tabId);
@@ -301,12 +417,75 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         title: message.title || '',
         found: false,
         foundAt: null,
+        isIncognito: false,
+        incognitoCycleCount: 0,
         nextRefreshTime: Date.now() + ((message.refreshInterval || 15) * 1000) + 2000
       };
       
       await saveMonitors(monitors);
       console.log('Started monitoring:', monitorId, monitors[monitorId]);
       sendResponse({ status: 'started', monitorId });
+    })();
+    return true;
+  
+  } else if (message.action === 'enableInPrivate') {
+    // Enable InPrivate for a specific monitor
+    (async () => {
+      const monitorId = message.monitorId;
+      const monitors = await getMonitors();
+      
+      if (!monitors[monitorId]) {
+        sendResponse({ status: 'error', message: 'Monitor not found' });
+        return;
+      }
+      
+      const monitor = monitors[monitorId];
+      
+      // Already in InPrivate
+      if (monitor.isIncognito) {
+        sendResponse({ status: 'already_enabled' });
+        return;
+      }
+      
+      const oldTabId = monitor.tabId;
+      const url = monitor.url;
+      
+      try {
+        // Open InPrivate window
+        const newWindow = await chrome.windows.create({
+          url: url,
+          incognito: true,
+          focused: false
+        });
+        const newTabId = newWindow.tabs[0].id;
+        
+        // Update monitor
+        monitors[monitorId].tabId = newTabId;
+        monitors[monitorId].isIncognito = true;
+        monitors[monitorId].incognitoCycleCount = 1;
+        monitors[monitorId].nextRefreshTime = Date.now() + (monitor.interval * 1000) + 2000;
+        
+        await saveMonitors(monitors);
+        
+        // Clear timer for old tab
+        clearTabTimer(oldTabId);
+        
+        // Schedule refresh for new tab
+        await scheduleRefreshForTab(newTabId);
+        
+        // Close the original tab
+        try {
+          await chrome.tabs.remove(oldTabId);
+        } catch (e) {
+          console.log('Could not close original tab:', e);
+        }
+        
+        console.log('Enabled InPrivate for monitor:', monitorId, 'new tab:', newTabId);
+        sendResponse({ status: 'enabled', newTabId });
+      } catch (e) {
+        console.log('Failed to enable InPrivate:', e);
+        sendResponse({ status: 'error', message: e.message });
+      }
     })();
     return true;
     
@@ -507,6 +686,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ status: 'scheduled' });
     })();
     return true;
+    
+  } else if (message.action === 'errorPageDetected') {
+    console.log('Error page detected, attempting InPrivate fallback/cycle...');
+    (async () => {
+      const senderTabId = sender.tab ? sender.tab.id : null;
+      const url = message.url;
+      
+      if (!senderTabId || !url) {
+        console.log('Missing tabId or URL for InPrivate fallback');
+        sendResponse({ status: 'error', message: 'Missing tabId or URL' });
+        return;
+      }
+      
+      const result = await handleErrorWithInPrivate(senderTabId, url);
+      sendResponse(result);
+    })();
+    return true;
   }
   
   return true;
@@ -566,4 +762,58 @@ chrome.runtime.onStartup.addListener(async () => {
   if (hasActiveMonitors) {
     startStuckWatchdog();
   }
+});
+
+// Track tabs that recently had navigation errors to avoid duplicate handling
+const recentNavErrors = new Map();
+
+// Listen for navigation errors (catches errors before content script runs)
+chrome.webNavigation.onErrorOccurred.addListener(async (details) => {
+  // Only handle main frame errors
+  if (details.frameId !== 0) return;
+  
+  const tabId = details.tabId;
+  const url = details.url;
+  const error = details.error;
+  
+  console.log('Navigation error detected:', error, 'for tab:', tabId, 'URL:', url);
+  
+  // Check if this tab has active monitors
+  const tabMonitors = await getActiveMonitorsForTab(tabId);
+  if (Object.keys(tabMonitors).length === 0) {
+    console.log('No active monitors for this tab, ignoring navigation error');
+    return;
+  }
+  
+  // Avoid duplicate handling (within 10 seconds)
+  const lastError = recentNavErrors.get(tabId);
+  if (lastError && Date.now() - lastError < 10000) {
+    console.log('Ignoring duplicate navigation error for tab:', tabId);
+    return;
+  }
+  recentNavErrors.set(tabId, Date.now());
+  
+  // Clean up old entries
+  for (const [tid, time] of recentNavErrors.entries()) {
+    if (Date.now() - time > 60000) {
+      recentNavErrors.delete(tid);
+    }
+  }
+  
+  console.log('Attempting InPrivate fallback/cycle for navigation error...');
+  
+  // Get the URL from one of the monitors if not available
+  let targetUrl = url;
+  if (!targetUrl || targetUrl === 'about:blank') {
+    const firstMonitor = Object.values(tabMonitors)[0];
+    targetUrl = firstMonitor?.url;
+  }
+  
+  if (!targetUrl) {
+    console.log('No URL available for InPrivate fallback');
+    return;
+  }
+  
+  const result = await handleErrorWithInPrivate(tabId, targetUrl);
+  console.log('Navigation error InPrivate result:', result);
 });
