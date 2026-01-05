@@ -6,7 +6,7 @@ A browser extension that monitors web pages for specific text and alerts you wit
 
 - 🔍 **Custom Text Monitoring** - Search for any text on any webpage
 - 🐕 **Audio Alerts** - Plays a dog bark sound when your text is found
-- ⏱️ **Configurable Refresh** - Choose refresh intervals from 15 seconds to 5 minutes
+- ⏱️ **Configurable Refresh** - Choose refresh intervals from 3 seconds to 5 minutes
 - 📑 **Multi-Tab Support** - Monitor multiple pages simultaneously
 - 🔢 **Multiple Monitors Per Tab** - Watch for different text strings on the same page
 - 🕵️ **InPrivate Mode** - Bypass rate limiting by opening monitors in InPrivate windows
@@ -43,12 +43,30 @@ A browser extension that monitors web pages for specific text and alerts you wit
 
 ### InPrivate Mode
 
-Some websites (like NVIDIA's store) implement rate limiting that can block or throttle frequent page refreshes. The InPrivate feature helps bypass these restrictions:
+Some websites (like NVIDIA's store, Best Buy, Amazon, and other high-demand retailers) implement aggressive rate limiting and bot detection that can block or throttle frequent page refreshes. This is especially common during product launches when many users are refreshing simultaneously.
 
+**Why websites block you:**
+- Repeated requests from the same session/cookies trigger anti-bot systems
+- Your IP + session combination gets flagged as suspicious
+- Sites may show "Access Denied", CAPTCHA pages, or simply stop loading
+
+**How InPrivate Mode helps:**
+- Each InPrivate window starts with a completely fresh session
+- No cookies, cache, or browsing history is shared with your main browser
+- The site sees you as a "new visitor" each time
+- Helps bypass session-based rate limiting (though IP-based limits may still apply)
+
+**To use InPrivate Mode:**
 1. Click the **🕵️ InPrivate** button on any active monitor
 2. The monitor will close the current tab and reopen in an InPrivate window
 3. InPrivate windows don't share cookies/sessions, helping avoid rate limits
 4. The InPrivate badge shows next to the monitor status
+
+**Pro Tips:**
+- Start with InPrivate mode from the beginning for high-demand sites
+- If you get blocked in your main browser, switch to InPrivate immediately
+- Consider using a VPN alongside InPrivate for IP-based restrictions
+- Some sites may still detect automation patterns - the Smart Backoff feature helps with this
 
 ### Smart Backoff
 
@@ -61,6 +79,24 @@ When a website returns an error page (throttling, "Access Denied", etc.), Watch 
 5. Shows the backoff countdown in the popup (e.g., "⏳ Backoff #3")
 
 This prevents aggressive retries that could get you temporarily banned.
+
+**Error patterns detected:**
+- "Access Denied" messages
+- HTTP 403/429 error pages
+- CAPTCHA challenges
+- "Too Many Requests" responses
+- Generic error pages with minimal content
+
+**Backoff timing:**
+| Attempt | Wait Time |
+|---------|-----------|
+| 1st     | 5 seconds |
+| 2nd     | 10 seconds |
+| 3rd     | 20 seconds |
+| 4th     | 40 seconds |
+| 5th+    | 2 minutes (max) |
+
+The backoff counter resets after a successful page load, so occasional errors won't permanently slow down your monitoring.
 
 ## Adding a Custom Sound
 
