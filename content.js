@@ -50,6 +50,47 @@ function isErrorPage() {
   return false;
 }
 
+// Check if current URL differs from the original monitored URL
+function getOriginalUrl() {
+  // Get the first monitor's URL as the original URL (all monitors on a tab should have same URL)
+  for (const monitor of Object.values(activeMonitors)) {
+    if (monitor.url) {
+      return monitor.url;
+    }
+  }
+  return null;
+}
+
+function isUrlRedirected() {
+  const originalUrl = getOriginalUrl();
+  if (!originalUrl) return false;
+  
+  const currentUrl = window.location.href;
+  
+  // Normalize URLs for comparison (remove trailing slashes, compare origins and paths)
+  try {
+    const original = new URL(originalUrl);
+    const current = new URL(currentUrl);
+    
+    // Compare origin and pathname (ignore query strings and fragments for basic comparison)
+    const originalBase = original.origin + original.pathname.replace(/\/$/, '');
+    const currentBase = current.origin + current.pathname.replace(/\/$/, '');
+    
+    if (originalBase !== currentBase) {
+      console.log('[WatchDog] URL redirected from:', originalBase, 'to:', currentBase);
+      return true;
+    }
+  } catch (e) {
+    // If URL parsing fails, do string comparison
+    if (originalUrl !== currentUrl) {
+      console.log('[WatchDog] URL changed from:', originalUrl, 'to:', currentUrl);
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 function checkAllMonitors() {
   if (Object.keys(activeMonitors).length === 0) {
     console.log('[WatchDog] No active monitors for this tab');
@@ -61,6 +102,19 @@ function checkAllMonitors() {
   if (!pageText) {
     console.log('[WatchDog] No page text found');
     chrome.runtime.sendMessage({ action: 'scheduleRefresh' });
+    return;
+  }
+  
+  // Check if URL was redirected (e.g., to an error page with different URL)
+  // If so, redirect back to original URL instead of triggering error fallback
+  if (isUrlRedirected()) {
+    const originalUrl = getOriginalUrl();
+    console.log('[WatchDog] 🔄 URL redirected, navigating back to original:', originalUrl);
+    chrome.runtime.sendMessage({ 
+      action: 'urlRedirected',
+      originalUrl: originalUrl,
+      currentUrl: window.location.href
+    });
     return;
   }
   

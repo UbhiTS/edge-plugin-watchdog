@@ -668,6 +668,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await saveMonitors(monitors);
         
         const tabId = monitors[monitorId].tabId;
+        
+        // Focus the tab and bring window to front
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          // Bring the window to the front and focus it
+          await chrome.windows.update(tab.windowId, { focused: true });
+          // Focus the specific tab
+          await chrome.tabs.update(tabId, { active: true });
+          console.log('Focused tab and window for found content');
+        } catch (e) {
+          console.log('Could not focus tab/window:', e);
+        }
+        
         // Reschedule for remaining active monitors
         await scheduleRefreshForTab(tabId);
       }
@@ -684,6 +697,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await scheduleRefreshForTab(senderTabId);
       }
       sendResponse({ status: 'scheduled' });
+    })();
+    return true;
+    
+  } else if (message.action === 'urlRedirected') {
+    // URL was redirected (e.g., to error page with different URL)
+    // Navigate back to original URL instead of triggering error fallback
+    console.log('URL redirected, navigating back to original URL...');
+    (async () => {
+      const senderTabId = sender.tab ? sender.tab.id : null;
+      const originalUrl = message.originalUrl;
+      
+      if (!senderTabId || !originalUrl) {
+        console.log('Missing tabId or originalUrl for redirect recovery');
+        sendResponse({ status: 'error', message: 'Missing tabId or originalUrl' });
+        return;
+      }
+      
+      try {
+        // Navigate the tab back to the original URL
+        await chrome.tabs.update(senderTabId, { url: originalUrl });
+        console.log('Navigated tab', senderTabId, 'back to original URL:', originalUrl);
+        
+        // Schedule refresh after navigation
+        // Note: The content script will re-initialize after navigation
+        sendResponse({ status: 'redirected', url: originalUrl });
+      } catch (e) {
+        console.log('Failed to navigate to original URL:', e);
+        sendResponse({ status: 'error', message: e.message });
+      }
     })();
     return true;
     
