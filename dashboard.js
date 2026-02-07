@@ -82,11 +82,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  const MAX_DISPLAY_LOGS = 200;
+
   function loadLogs() {
     const filter = logFilter.value;
     chrome.runtime.sendMessage({ action: 'getLogs', filter }, (response) => {
       if (chrome.runtime.lastError || !response) return;
-      const logs = response.logs || [];
+      const allLogs = response.logs || [];
+
+      // Only keep the most recent entries to avoid DOM bloat
+      const logs = allLogs.length > MAX_DISPLAY_LOGS ? allLogs.slice(-MAX_DISPLAY_LOGS) : allLogs;
 
       if (logs.length === 0) {
         if (lastLogCount !== 0) {
@@ -97,8 +102,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       // Only re-render if log count changed
-      if (logs.length === lastLogCount) return;
-      lastLogCount = logs.length;
+      if (allLogs.length === lastLogCount) return;
+      lastLogCount = allLogs.length;
 
       let html = '';
       for (const entry of logs) {
