@@ -11,7 +11,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const consolePanel = document.getElementById('consolePanel');
   const logFilter = document.getElementById('logFilter');
   const clearLogsBtn = document.getElementById('clearLogsBtn');
-  const toggleConsoleBtn = document.getElementById('toggleConsoleBtn');
   const autoScrollToggle = document.getElementById('autoScrollToggle');
 
   const resizeHandle = document.getElementById('resizeHandle');
@@ -50,20 +49,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- Console Panel ---
-
-  toggleConsoleBtn.addEventListener('click', () => {
-    const collapsed = consolePanel.classList.toggle('collapsed');
-    toggleConsoleBtn.textContent = collapsed ? '▶' : '◀';
-    resizeHandle.style.display = collapsed ? 'none' : '';
-  });
-
-  consolePanel.querySelector('.console-header').addEventListener('click', (e) => {
-    if (consolePanel.classList.contains('collapsed')) {
-      consolePanel.classList.remove('collapsed');
-      toggleConsoleBtn.textContent = '◀';
-      resizeHandle.style.display = '';
-    }
-  });
 
   autoScrollToggle.addEventListener('click', () => {
     autoScroll = !autoScroll;
@@ -298,9 +283,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   // --- Initial load & periodic refresh ---
@@ -312,5 +295,5 @@ document.addEventListener('DOMContentLoaded', () => {
     loadMonitors();
     loadHistory();
     loadLogs();
-  }, 1000);
+  }, 2000);
 });

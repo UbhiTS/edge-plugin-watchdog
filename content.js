@@ -23,46 +23,20 @@ function wdLog(...args) {
   } catch (e) { /* extension context may be invalidated */ }
 }
 
-// Error page detection patterns
-const ERROR_PATTERNS = [
-  "can't reach this page",
-  "cannot reach this page",
-  "this site can't be reached",
-  "this page isn't working",
-  "err_connection",
-  "err_http",
-  "err_ssl",
-  "err_timed_out",
-  "err_name_not_resolved",
-  "err_network",
-  "err_failed",
-  "err_aborted",
-  "err_blocked",
-  "connection timed out",
-  "502 bad gateway",
-  "503 service unavailable",
-  "504 gateway timeout",
-  "500 internal server error",
-  "access denied",
-  "too many requests",
-  "rate limit"
-];
+// Error page detection - single compiled regex for fast matching
+const ERROR_PATTERN_RE = /can'?t reach this page|cannot reach this page|this site can'?t be reached|this page isn'?t working|err_(connection|http|ssl|timed_out|name_not_resolved|network|failed|aborted|blocked)|connection timed out|50[0234] (bad gateway|internal server error|service unavailable|gateway timeout)|access denied|too many requests|rate limit/i;
 
 function isErrorPage() {
   const pageText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
-  const pageTextLower = pageText.toLowerCase();
   const titleLower = document.title.toLowerCase();
   
-  // Check for error patterns in page content or title
-  for (const pattern of ERROR_PATTERNS) {
-    if (pageTextLower.includes(pattern) || titleLower.includes(pattern)) {
-      wdLog('Detected error page pattern:', pattern);
-      return true;
-    }
+  if (ERROR_PATTERN_RE.test(pageText) || ERROR_PATTERN_RE.test(titleLower)) {
+    wdLog('Detected error page');
+    return true;
   }
   
-  // Check for very minimal page content (often indicates error)
-  if (pageText.length < 200 && (pageTextLower.includes('error') || pageTextLower.includes('denied'))) {
+  // Very minimal page content with error keywords
+  if (pageText.length < 200 && /error|denied/i.test(pageText)) {
     wdLog('Detected minimal page with error keywords');
     return true;
   }
@@ -147,15 +121,11 @@ function evaluateSearchTerms(searchTerms, pageTextLower) {
 }
 
 function checkAllMonitors() {
-  if (Object.keys(activeMonitors).length === 0) {
-    wdLog('No active monitors for this tab');
-    return;
-  }
+  if (Object.keys(activeMonitors).length === 0) return;
   
   const pageText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
   
   if (!pageText) {
-    wdLog('No page text found');
     chrome.runtime.sendMessage({ action: 'scheduleRefresh' });
     return;
   }
@@ -196,11 +166,8 @@ function checkAllMonitors() {
     let isMatch = false;
 
     if (searchTerms && searchTerms.length > 0) {
-      wdLog('Evaluating terms:', searchTerms.map(t => `${t.operator || ''} "${t.term}"`).join(' '));
       isMatch = evaluateSearchTerms(searchTerms, pageTextLower);
     } else {
-      // Legacy fallback: single searchText string
-      wdLog('Checking for:', searchText);
       isMatch = pageTextLower.includes(searchText.toLowerCase());
     }
     

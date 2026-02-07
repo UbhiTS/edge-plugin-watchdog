@@ -17,13 +17,16 @@ const WATCHDOG_CHECK_INTERVAL_MS = 10000; // Check every 10 seconds
 const MAX_LOG_ENTRIES = 500;
 let logBuffer = [];
 
+function trimLogBuffer() {
+  if (logBuffer.length > MAX_LOG_ENTRIES) {
+    logBuffer.splice(0, logBuffer.length - MAX_LOG_ENTRIES);
+  }
+}
+
 function wdLog(...args) {
   const message = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-  const entry = { timestamp: Date.now(), message, source: 'background', level: 'info' };
-  logBuffer.push(entry);
-  if (logBuffer.length > MAX_LOG_ENTRIES) {
-    logBuffer = logBuffer.slice(-MAX_LOG_ENTRIES);
-  }
+  logBuffer.push({ timestamp: Date.now(), message, source: 'background', level: 'info' });
+  trimLogBuffer();
   console.log('[WD:background]', ...args);
 }
 
@@ -148,26 +151,22 @@ async function addToHistory(monitor) {
   await saveHistory(history);
 }
 
-// Get all monitors for a specific tab
-async function getMonitorsForTab(tabId) {
-  const monitors = await getMonitors();
+// Get all monitors for a specific tab (pass monitors to avoid redundant storage read)
+async function getMonitorsForTab(tabId, monitors) {
+  if (!monitors) monitors = await getMonitors();
   const result = {};
   for (const [id, monitor] of Object.entries(monitors)) {
-    if (monitor.tabId === tabId) {
-      result[id] = monitor;
-    }
+    if (monitor.tabId === tabId) result[id] = monitor;
   }
   return result;
 }
 
 // Get active (not found) monitors for a tab
-async function getActiveMonitorsForTab(tabId) {
-  const monitors = await getMonitorsForTab(tabId);
+async function getActiveMonitorsForTab(tabId, monitors) {
+  const tabMonitors = await getMonitorsForTab(tabId, monitors);
   const result = {};
-  for (const [id, monitor] of Object.entries(monitors)) {
-    if (!monitor.found) {
-      result[id] = monitor;
-    }
+  for (const [id, monitor] of Object.entries(tabMonitors)) {
+    if (!monitor.found) result[id] = monitor;
   }
   return result;
 }
@@ -338,27 +337,25 @@ function clearTabTimer(tabId) {
   if (timer) {
     clearTimeout(timer);
     refreshTimers.delete(tabId);
-    wdLog('Cleared timer for tab:', tabId);
   }
 }
 
 // Schedule refresh for a tab (uses shortest interval among active monitors)
 async function scheduleRefreshForTab(tabId) {
-  const activeMonitors = await getActiveMonitorsForTab(tabId);
-  const monitorIds = Object.keys(activeMonitors);
+  const allMonitors = await getMonitors();
+  const monitorIds = [];
+  let shortestInterval = Infinity;
   
-  if (monitorIds.length === 0) {
-    wdLog('No active monitors for tab, not scheduling:', tabId);
-    clearTabTimer(tabId);
-    return;
+  for (const [id, monitor] of Object.entries(allMonitors)) {
+    if (monitor.tabId === tabId && !monitor.found) {
+      monitorIds.push(id);
+      if (monitor.interval < shortestInterval) shortestInterval = monitor.interval;
+    }
   }
   
-  // Find shortest interval
-  let shortestInterval = Infinity;
-  for (const monitor of Object.values(activeMonitors)) {
-    if (monitor.interval < shortestInterval) {
-      shortestInterval = monitor.interval;
-    }
+  if (monitorIds.length === 0) {
+    clearTabTimer(tabId);
+    return;
   }
   
   clearTabTimer(tabId);
@@ -366,37 +363,30 @@ async function scheduleRefreshForTab(tabId) {
   const intervalMs = shortestInterval * 1000;
   const nextRefreshTime = Date.now() + intervalMs;
   
-  // Update next refresh time for all active monitors on this tab
-  const allMonitors = await getMonitors();
   for (const id of monitorIds) {
-    if (allMonitors[id]) {
-      allMonitors[id].nextRefreshTime = nextRefreshTime;
-    }
+    allMonitors[id].nextRefreshTime = nextRefreshTime;
   }
   await saveMonitors(allMonitors);
   
   wdLog('Scheduling refresh for tab', tabId, 'in', shortestInterval, 'seconds');
   
   const timer = setTimeout(async () => {
-    const currentActive = await getActiveMonitorsForTab(tabId);
-    if (Object.keys(currentActive).length === 0) {
-      wdLog('No active monitors, not refreshing:', tabId);
-      return;
-    }
-    
     try {
+      const monitors = await getMonitors();
+      const hasActive = Object.values(monitors).some(m => m.tabId === tabId && !m.found);
+      if (!hasActive) return;
+      
       await chrome.tabs.get(tabId);
       wdLog('Refreshing tab:', tabId);
       chrome.tabs.reload(tabId);
     } catch (e) {
       wdLog('Tab no longer exists, removing monitors:', tabId);
       const monitors = await getMonitors();
+      let changed = false;
       for (const [id, monitor] of Object.entries(monitors)) {
-        if (monitor.tabId === tabId) {
-          delete monitors[id];
-        }
+        if (monitor.tabId === tabId) { delete monitors[id]; changed = true; }
       }
-      await saveMonitors(monitors);
+      if (changed) await saveMonitors(monitors);
       clearTabTimer(tabId);
     }
   }, intervalMs);
@@ -414,57 +404,44 @@ async function checkForStuckMonitors() {
   const tabsToRefresh = new Set();
   
   for (const [id, monitor] of Object.entries(monitors)) {
-    // Only check active (not found) monitors with a nextRefreshTime set
-    if (!monitor.found && monitor.nextRefreshTime) {
-      const timeSinceExpected = now - monitor.nextRefreshTime;
-      
-      if (timeSinceExpected > STUCK_THRESHOLD_MS) {
-        wdLog('Monitor appears stuck:', id, 'Expected refresh was', Math.round(timeSinceExpected / 1000), 'seconds ago');
-        tabsToRefresh.add(monitor.tabId);
-      }
+    if (!monitor.found && monitor.nextRefreshTime && (now - monitor.nextRefreshTime) > STUCK_THRESHOLD_MS) {
+      wdLog('Monitor appears stuck:', id, Math.round((now - monitor.nextRefreshTime) / 1000), 's overdue');
+      tabsToRefresh.add(monitor.tabId);
     }
   }
   
-  // Force refresh stuck tabs
+  if (tabsToRefresh.size === 0) return;
+  
+  // Re-read monitors once for all updates
+  const currentMonitors = await getMonitors();
+  let monitorsChanged = false;
+  
   for (const tabId of tabsToRefresh) {
     try {
       await chrome.tabs.get(tabId);
       wdLog('Force refreshing stuck tab:', tabId);
       
-      // Update nextRefreshTime before refreshing to prevent repeated force refreshes
-      const currentMonitors = await getMonitors();
-      const activeForTab = await getActiveMonitorsForTab(tabId);
-      
-      // Find shortest interval for this tab
+      // Find shortest interval & update nextRefreshTime in one pass
       let shortestInterval = 15;
-      for (const monitor of Object.values(activeForTab)) {
-        if (monitor.interval < shortestInterval) {
-          shortestInterval = monitor.interval;
-        }
+      for (const m of Object.values(currentMonitors)) {
+        if (m.tabId === tabId && !m.found && m.interval < shortestInterval) shortestInterval = m.interval;
+      }
+      const newTime = Date.now() + (shortestInterval * 1000) + 5000;
+      for (const [id, m] of Object.entries(currentMonitors)) {
+        if (m.tabId === tabId && !m.found) { currentMonitors[id].nextRefreshTime = newTime; monitorsChanged = true; }
       }
       
-      const newNextRefreshTime = Date.now() + (shortestInterval * 1000) + 5000; // Add 5s buffer
-      for (const [id, monitor] of Object.entries(currentMonitors)) {
-        if (monitor.tabId === tabId && !monitor.found) {
-          currentMonitors[id].nextRefreshTime = newNextRefreshTime;
-        }
-      }
-      await saveMonitors(currentMonitors);
-      
-      // Reload the tab
       chrome.tabs.reload(tabId);
     } catch (e) {
       wdLog('Stuck tab no longer exists, cleaning up:', tabId);
-      const currentMonitors = await getMonitors();
-      for (const [id, monitor] of Object.entries(currentMonitors)) {
-        if (monitor.tabId === tabId) {
-          delete currentMonitors[id];
-        }
+      for (const [id, m] of Object.entries(currentMonitors)) {
+        if (m.tabId === tabId) { delete currentMonitors[id]; monitorsChanged = true; }
       }
-      await saveMonitors(currentMonitors);
       clearTabTimer(tabId);
     }
   }
+  
+  if (monitorsChanged) await saveMonitors(currentMonitors);
 }
 
 // Start the watchdog timer
@@ -723,12 +700,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       
       const isMonitored = Object.keys(activeMonitors).length > 0;
       
-      wdLog('Status check for tab:', senderTabId, 'monitors:', Object.keys(activeMonitors).length);
-      
-      sendResponse({ 
-        isMonitored,
-        monitors: activeMonitors
-      });
+      sendResponse({ isMonitored, monitors: activeMonitors });
     })();
     return true;
     
@@ -780,17 +752,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
     
   } else if (message.action === 'appendLog') {
-    // Content scripts can send their logs here
-    const entry = {
+    logBuffer.push({
       timestamp: message.timestamp || Date.now(),
       message: String(message.message || ''),
       source: message.source || 'content',
       level: message.level || 'info'
-    };
-    logBuffer.push(entry);
-    if (logBuffer.length > MAX_LOG_ENTRIES) {
-      logBuffer = logBuffer.slice(-MAX_LOG_ENTRIES);
-    }
+    });
+    trimLogBuffer();
     sendResponse({ status: 'ok' });
     return true;
     
@@ -1013,14 +981,19 @@ chrome.webNavigation.onErrorOccurred.addListener(async (details) => {
 
 // --- InPrivate Window Geometry Tracking ---
 
-// When an InPrivate window is moved or resized, persist the new geometry
-chrome.windows.onBoundsChanged.addListener(async (window) => {
+// When an InPrivate window is moved or resized, persist the new geometry (debounced)
+let geometrySaveTimer = null;
+chrome.windows.onBoundsChanged.addListener((window) => {
   const url = incognitoWindowUrls.get(window.id);
-  if (!url) return; // Not a tracked InPrivate window
+  if (!url) return;
 
-  const geometry = { left: window.left, top: window.top, width: window.width, height: window.height };
-  await saveWindowGeometry(url, geometry);
-  wdLog('Updated geometry for InPrivate window', window.id, ':', JSON.stringify(geometry));
+  // Debounce: only save after user stops resizing/moving for 500ms
+  clearTimeout(geometrySaveTimer);
+  geometrySaveTimer = setTimeout(async () => {
+    const geometry = { left: window.left, top: window.top, width: window.width, height: window.height };
+    await saveWindowGeometry(url, geometry);
+    wdLog('Saved geometry for window', window.id);
+  }, 500);
 });
 
 // Clean up tracking map when an InPrivate window is closed

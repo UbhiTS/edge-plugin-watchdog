@@ -177,13 +177,6 @@
       max-height: 300px;
       overflow-y: auto;
     }
-    .no-monitors {
-      text-align: center;
-      padding: 20px;
-      color: #666;
-      font-size: 13px;
-    }
-    
     /* Tab group container */
     .tab-group {
       background: rgba(255,255,255,0.03);
@@ -191,44 +184,15 @@
       margin-bottom: 10px;
       overflow: hidden;
     }
-    .tab-group-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+    .tab-header {
       padding: 8px 12px;
       background: rgba(255,255,255,0.05);
-      border-bottom: 1px solid rgba(255,255,255,0.1);
-    }
-    .tab-group-title {
+      border-bottom: 1px solid rgba(255,255,255,0.08);
       font-size: 11px;
       color: #888;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      flex: 1;
-    }
-    .tab-group-actions {
-      display: flex;
-      gap: 6px;
-      margin-left: 8px;
-    }
-    .tab-group-btn {
-      padding: 3px 8px;
-      border: none;
-      border-radius: 4px;
-      font-size: 10px;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .tab-group-btn.focus {
-      background: #4488ff;
-      color: #fff;
-    }
-    .tab-group-btn.focus:hover {
-      background: #66aaff;
-    }
-    .tab-group-monitors {
-      padding: 8px;
     }
     
     /* Individual monitor card */
@@ -267,10 +231,6 @@
       border-radius: 10px;
       white-space: nowrap;
     }
-    .monitor-status.active {
-      background: #76b900;
-      color: #fff;
-    }
     .monitor-status.inprivate-badge {
       background: #9c27b0;
       color: #fff;
@@ -286,14 +246,6 @@
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.6; }
-    }
-    .monitor-url {
-      font-size: 11px;
-      color: #888;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      margin-bottom: 6px;
     }
     .monitor-footer {
       display: flex;
@@ -330,14 +282,6 @@
     .monitor-btn.focus:hover {
       background: #66aaff;
     }
-    .monitor-btn.close {
-      background: #666;
-      color: #fff;
-    }
-    .monitor-btn.close:hover {
-      background: #888;
-    }
-    
     /* History section */
     .history-section {
       margin-top: 15px;
@@ -393,54 +337,12 @@
       color: #aaa;
       margin-bottom: 4px;
     }
-    .history-url {
-      font-size: 10px;
-      color: #999;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .history-footer {
-      display: flex;
-      justify-content: flex-end;
-    }
-    
-    /* Settings */
-    .settings-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid rgba(255,255,255,0.1);
-    }
-    .settings-row input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      cursor: pointer;
-      accent-color: #76b900;
-    }
-    .settings-row label {
-      font-size: 12px;
-      color: #aaa;
-      cursor: pointer;
-      user-select: none;
-    }
-    .settings-row label:hover {
-      color: #ccc;
-    }
-    
     /* InPrivate button */
     .monitor-btn.inprivate {
       background: #9c27b0;
     }
     .monitor-btn.inprivate:hover {
       background: #ba68c8;
-    }
-    .monitor-btn.inprivate.enabled {
-      background: #6a1b9a;
-      cursor: default;
-      opacity: 0.8;
     }
   </style>
 </head>
