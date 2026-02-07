@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Watch Dog",
+  "name": "Watchdog",
   "version": "2.0",
   "description": "Monitor multiple tabs for custom text and get alerted when found",
   "permissions": [

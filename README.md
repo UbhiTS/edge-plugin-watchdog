@@ -1,4 +1,4 @@
-# Watch Dog 🐕 - Page Monitor Extension
+# Watchdog 🐕 - Page Monitor Extension
 
 A browser extension that monitors web pages for specific text and alerts you with a dog bark sound when found. Perfect for tracking stock availability, price drops, content updates, or any text changes on websites.
 
@@ -27,7 +27,7 @@ A browser extension that monitors web pages for specific text and alerts you wit
 ## Usage
 
 1. Navigate to the page you want to monitor
-2. Click the Watch Dog extension icon in the toolbar
+2. Click the Watchdog extension icon in the toolbar
 3. Enter the text you want to search for
 4. Select a refresh interval
 5. Click **"Add Monitor"**
@@ -70,7 +70,7 @@ Some websites (like NVIDIA's store, Best Buy, Amazon, and other high-demand reta
 
 ### Smart Backoff
 
-When a website returns an error page (throttling, "Access Denied", etc.), Watch Dog automatically:
+When a website returns an error page (throttling, "Access Denied", etc.), Watchdog automatically:
 
 1. Detects the error using common error patterns
 2. Closes the current InPrivate window
