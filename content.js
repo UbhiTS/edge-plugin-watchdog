@@ -195,10 +195,7 @@ function checkAllMonitors() {
   const remainingMonitors = Object.keys(activeMonitors).filter(id => !foundMonitors.has(id));
   
   if (remainingMonitors.length > 0) {
-    wdLog('Still looking for', remainingMonitors.length, 'items, scheduling refresh...');
     chrome.runtime.sendMessage({ action: 'scheduleRefresh' });
-  } else {
-    wdLog('All monitors found or none active');
   }
 }
 
@@ -429,17 +426,15 @@ function init() {
       return;
     }
     
-    wdLog('Got status:', response);
+    const terms = Object.values(response.monitors).map(m => '"' + m.searchText + '"').join(', ');
+    wdLog('Checking page for', Object.keys(response.monitors).length, 'term(s):', terms);
     
     if (!response.isMonitored || !response.monitors) {
-      wdLog('This tab is not being monitored');
       return;
     }
     
     activeMonitors = response.monitors;
     foundMonitors = new Set();
-    
-    wdLog('Monitoring for', Object.keys(activeMonitors).length, 'search terms');
     
     // Wait for page to fully load, then check
     if (document.readyState === 'complete') {

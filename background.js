@@ -108,7 +108,12 @@ async function stopAlarmSound() {
     await chrome.offscreen.closeDocument();
     wdLog('Offscreen document closed');
   } catch (e) {
-    wdLog('Error stopping alarm:', e);
+    // Offscreen doc may not exist if alarm wasn't playing — safe to ignore
+    if (e.message && e.message.includes('No current offscreen')) {
+      // Expected when no alarm is active
+    } else {
+      wdLog('Error stopping alarm: offscreen close failed -', e.message || e);
+    }
   }
 }
 
@@ -245,10 +250,12 @@ async function handleErrorPageRetry(tabId, url) {
     // 3) Close ALL InPrivate windows
     for (const winId of windowIds) {
       try {
+        const url = incognitoWindowUrls.get(winId);
+        const label = url ? new URL(url).hostname : 'window ' + winId;
         await chrome.windows.remove(winId);
-        wdLog('Closed InPrivate window:', winId);
+        wdLog('Closed InPrivate window:', label);
       } catch (e) {
-        wdLog('Could not close InPrivate window', winId, ':', e);
+        wdLog('Could not close InPrivate window:', e);
       }
     }
     
@@ -340,6 +347,16 @@ function clearTabTimer(tabId) {
   }
 }
 
+// Get a short label for a tab (title or hostname, fallback to tabId)
+async function getTabLabel(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.title) return tab.title.length > 50 ? tab.title.substring(0, 50) + '…' : tab.title;
+    if (tab.url) return new URL(tab.url).hostname;
+  } catch (e) {}
+  return 'tab ' + tabId;
+}
+
 // Schedule refresh for a tab (uses shortest interval among active monitors)
 async function scheduleRefreshForTab(tabId) {
   const allMonitors = await getMonitors();
@@ -368,7 +385,8 @@ async function scheduleRefreshForTab(tabId) {
   }
   await saveMonitors(allMonitors);
   
-  wdLog('Scheduling refresh for tab', tabId, 'in', shortestInterval, 'seconds');
+  const label = await getTabLabel(tabId);
+  wdLog('⏱️ Next refresh in', shortestInterval + 's:', label);
   
   const timer = setTimeout(async () => {
     try {
@@ -376,8 +394,9 @@ async function scheduleRefreshForTab(tabId) {
       const hasActive = Object.values(monitors).some(m => m.tabId === tabId && !m.found);
       if (!hasActive) return;
       
+      const lbl = await getTabLabel(tabId);
       await chrome.tabs.get(tabId);
-      wdLog('Refreshing tab:', tabId);
+      wdLog('🔄 Refreshing:', lbl);
       chrome.tabs.reload(tabId);
     } catch (e) {
       wdLog('Tab no longer exists, removing monitors:', tabId);
@@ -448,13 +467,11 @@ async function checkForStuckMonitors() {
 function startStuckWatchdog() {
   if (stuckWatchdogTimer) return; // Already running
   
-  wdLog('Starting stuck monitor watchdog');
   stuckWatchdogTimer = setInterval(async () => {
     const monitors = await getMonitors();
     const hasActiveMonitors = Object.values(monitors).some(m => !m.found);
     
     if (!hasActiveMonitors) {
-      wdLog('No active monitors, stopping watchdog');
       stopStuckWatchdog();
       return;
     }
@@ -468,12 +485,10 @@ function stopStuckWatchdog() {
   if (stuckWatchdogTimer) {
     clearInterval(stuckWatchdogTimer);
     stuckWatchdogTimer = null;
-    wdLog('Stopped stuck monitor watchdog');
   }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  wdLog('Background received message:', message.action);
   
   if (message.action === 'startMonitoring') {
     (async () => {
@@ -995,9 +1010,11 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   
   const monitors = await getMonitors();
   let changed = false;
+  const removedUrls = [];
   
   for (const [id, monitor] of Object.entries(monitors)) {
     if (monitor.tabId === tabId) {
+      removedUrls.push(monitor.url ? new URL(monitor.url).hostname : monitor.searchText);
       delete monitors[id];
       changed = true;
     }
@@ -1007,7 +1024,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
     await saveMonitors(monitors);
     clearTabTimer(tabId);
     stopAlarmSound();
-    wdLog('Tab closed, removed monitors for tab:', tabId);
+    wdLog('Tab closed, removed', removedUrls.length, 'monitor(s):', removedUrls.join(', '));
   }
 });
 
