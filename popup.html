@@ -344,6 +344,65 @@
     .monitor-btn.inprivate:hover {
       background: #ba68c8;
     }
+    /* Saved Configurations */
+    .saved-configs-section {
+      margin-top: 15px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      padding-top: 12px;
+      display: none;
+    }
+    .saved-configs-section h2 {
+      font-size: 13px;
+      margin: 0 0 10px 0;
+      color: #aaa;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .config-card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      border-left: 3px solid #4caf50;
+    }
+    .config-card .config-name {
+      font-size: 12px;
+      font-weight: bold;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+    .config-card .config-detail {
+      font-size: 10px;
+      color: #888;
+      margin-bottom: 6px;
+    }
+    .config-card .config-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .config-card .config-btn {
+      padding: 4px 10px;
+      border: none;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .config-btn.restore {
+      background: #4caf50;
+      color: #fff;
+    }
+    .config-btn.restore:hover {
+      background: #66bb6a;
+    }
+    .config-btn.delete {
+      background: #666;
+      color: #fff;
+    }
+    .config-btn.delete:hover {
+      background: #888;
+    }
   </style>
 </head>
 <body>
@@ -351,7 +410,7 @@
     <h1 style="margin:0;">Watch Dog 🐕 - Page Monitor</h1>
     <button id="openDashboardBtn" title="Open full dashboard" style="padding:4px 10px; border:none; border-radius:5px; background:#2a2a4a; color:#76b900; font-size:16px; cursor:pointer; transition:all 0.2s;">⛶</button>
   </div>
-  
+
   <div class="add-section">
     <div id="savedConfigHint" class="saved-config-hint" style="display:none;"></div>
     <div id="termsBuilder" class="terms-builder">
@@ -377,12 +436,20 @@
   <div class="monitors-section" id="monitorsSection" style="display: none;">
     <h2>
       <span>📋 Active Monitors (<span id="monitorCount">0</span>)</span>
+      <button id="saveConfigBtn" class="stop-all-btn" style="background:#2e7d32; margin-right:6px;" title="Save current config">💾 Save</button>
       <button id="stopAllBtn" class="stop-all-btn">Stop All</button>
     </h2>
     <div id="monitorsList" class="monitors-list">
     </div>
   </div>
   
+  <div class="saved-configs-section" id="savedConfigsSection">
+    <h2>
+      <span>💾 Saved Configs (<span id="configCount">0</span>)</span>
+    </h2>
+    <div id="configsList"></div>
+  </div>
+
   <div class="history-section" id="historySection" style="display: none;">
     <h2>
       <span>📜 History (<span id="historyCount">0</span>)</span>

@@ -762,6 +762,128 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ status: 'ok' });
     return true;
     
+  } else if (message.action === 'saveConfig') {
+    (async () => {
+      const monitors = await getMonitors();
+      const activeMonitors = Object.values(monitors).filter(m => !m.found);
+      if (activeMonitors.length === 0) {
+        sendResponse({ status: 'empty', message: 'No active monitors to save' });
+        return;
+      }
+      const config = {
+        id: generateId(),
+        name: message.name || new Date().toLocaleString(),
+        savedAt: Date.now(),
+        monitors: activeMonitors.map(m => ({
+          searchText: m.searchText,
+          searchTerms: m.searchTerms,
+          interval: m.interval,
+          url: m.url,
+          title: m.title,
+          isIncognito: m.isIncognito || false
+        }))
+      };
+      const { savedConfigs = [] } = await new Promise(resolve =>
+        chrome.storage.local.get(['savedConfigs'], resolve)
+      );
+      savedConfigs.push(config);
+      // Keep max 20 configs
+      if (savedConfigs.length > 20) savedConfigs.splice(0, savedConfigs.length - 20);
+      await new Promise(resolve => chrome.storage.local.set({ savedConfigs }, resolve));
+      wdLog('Saved config "' + config.name + '" with', config.monitors.length, 'monitor(s)');
+      sendResponse({ status: 'saved', config });
+    })();
+    return true;
+
+  } else if (message.action === 'getSavedConfigs') {
+    chrome.storage.local.get(['savedConfigs'], (result) => {
+      sendResponse({ configs: result.savedConfigs || [] });
+    });
+    return true;
+
+  } else if (message.action === 'deleteConfig') {
+    (async () => {
+      const { savedConfigs = [] } = await new Promise(resolve =>
+        chrome.storage.local.get(['savedConfigs'], resolve)
+      );
+      const updated = savedConfigs.filter(c => c.id !== message.configId);
+      await new Promise(resolve => chrome.storage.local.set({ savedConfigs: updated }, resolve));
+      wdLog('Deleted config:', message.configId);
+      sendResponse({ status: 'deleted' });
+    })();
+    return true;
+
+  } else if (message.action === 'restoreConfig') {
+    (async () => {
+      const { savedConfigs = [] } = await new Promise(resolve =>
+        chrome.storage.local.get(['savedConfigs'], resolve)
+      );
+      const config = savedConfigs.find(c => c.id === message.configId);
+      if (!config) {
+        sendResponse({ status: 'not_found' });
+        return;
+      }
+
+      const monitors = await getMonitors();
+      let restoredCount = 0;
+
+      for (const saved of config.monitors) {
+        try {
+          let newTabId;
+
+          if (saved.isIncognito) {
+            const savedGeometry = await getWindowGeometry(saved.url);
+            const createOpts = { url: saved.url, incognito: true, focused: false };
+            if (savedGeometry) Object.assign(createOpts, savedGeometry);
+            const newWindow = await chrome.windows.create(createOpts);
+            newTabId = newWindow.tabs[0].id;
+            incognitoWindowUrls.set(newWindow.id, saved.url);
+            if (!savedGeometry) {
+              await saveWindowGeometry(saved.url, {
+                left: newWindow.left, top: newWindow.top,
+                width: newWindow.width, height: newWindow.height
+              });
+            }
+          } else {
+            const tab = await chrome.tabs.create({ url: saved.url, active: false });
+            newTabId = tab.id;
+          }
+
+          const monitorId = generateId();
+          monitors[monitorId] = {
+            id: monitorId,
+            tabId: newTabId,
+            searchText: saved.searchText,
+            searchTerms: saved.searchTerms || [{ term: saved.searchText, operator: null }],
+            interval: saved.interval,
+            url: saved.url,
+            title: saved.title || '',
+            found: false,
+            foundAt: null,
+            isIncognito: saved.isIncognito || false,
+            incognitoCycleCount: saved.isIncognito ? 1 : 0,
+            nextRefreshTime: Date.now() + (saved.interval * 1000) + 2000
+          };
+
+          restoredCount++;
+          wdLog('Restored monitor for', saved.url, '→ tab', newTabId, saved.isIncognito ? '(InPrivate)' : '');
+        } catch (e) {
+          wdLog('Failed to restore monitor for', saved.url, ':', e.message);
+        }
+      }
+
+      await saveMonitors(monitors);
+
+      const tabIds = new Set(Object.values(monitors).filter(m => !m.found).map(m => m.tabId));
+      for (const tabId of tabIds) {
+        await scheduleRefreshForTab(tabId);
+      }
+
+      wdLog('Config "' + config.name + '" restored:', restoredCount, 'monitor(s)');
+      sendResponse({ status: 'restored', count: restoredCount });
+    })();
+    return true;
+
   } else if (message.action === 'found') {
     // Content found - includes monitorId and searchText
     wdLog('Content FOUND! Playing alarm...');
@@ -894,12 +1016,10 @@ chrome.runtime.onStartup.addListener(async () => {
   wdLog('Service worker starting up, restoring timers...');
   const monitors = await getMonitors();
   const tabIds = new Set();
-  let hasActiveMonitors = false;
   
   for (const monitor of Object.values(monitors)) {
     if (!monitor.found) {
       tabIds.add(monitor.tabId);
-      hasActiveMonitors = true;
     }
   }
   
@@ -919,8 +1039,8 @@ chrome.runtime.onStartup.addListener(async () => {
   
   await saveMonitors(monitors);
   
-  // Start the stuck watchdog if there are active monitors
-  if (hasActiveMonitors) {
+  const hasActive = Object.values(monitors).some(m => !m.found);
+  if (hasActive) {
     startStuckWatchdog();
   }
 });

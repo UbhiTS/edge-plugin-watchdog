@@ -292,6 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
       
       monitorsSection.style.display = 'block';
       stopAllBtn.style.display = 'block';
+      saveConfigBtn.style.display = 'inline-block';
       
       // Group monitors by tab
       const byTab = {};
@@ -468,9 +469,90 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // --- Saved Configurations ---
+  const saveConfigBtn = document.getElementById('saveConfigBtn');
+  const savedConfigsSection = document.getElementById('savedConfigsSection');
+  const configsList = document.getElementById('configsList');
+  const configCount = document.getElementById('configCount');
+
+  saveConfigBtn.addEventListener('click', () => {
+    const name = prompt('Name this configuration:', new Date().toLocaleString());
+    if (name === null) return;
+    saveConfigBtn.disabled = true;
+    saveConfigBtn.textContent = 'Saving...';
+    chrome.runtime.sendMessage({ action: 'saveConfig', name: name.trim() || new Date().toLocaleString() }, (response) => {
+      saveConfigBtn.disabled = false;
+      saveConfigBtn.textContent = '💾 Save';
+      if (response && response.status === 'saved') {
+        saveConfigBtn.style.background = '#4caf50';
+        setTimeout(() => { saveConfigBtn.style.background = '#2e7d32'; }, 1000);
+        loadSavedConfigs();
+      }
+    });
+  });
+
+  function loadSavedConfigs() {
+    chrome.runtime.sendMessage({ action: 'getSavedConfigs' }, (response) => {
+      if (chrome.runtime.lastError || !response) return;
+      const configs = response.configs || [];
+      configCount.textContent = configs.length;
+
+      if (configs.length === 0) {
+        savedConfigsSection.style.display = 'none';
+        return;
+      }
+
+      savedConfigsSection.style.display = 'block';
+      let html = '';
+      for (const config of configs.slice().reverse()) {
+        const count = config.monitors.length;
+        const inPrivate = config.monitors.filter(m => m.isIncognito).length;
+        const urls = [...new Set(config.monitors.map(m => {
+          try { return new URL(m.url).hostname; } catch { return m.url; }
+        }))].join(', ');
+        let detail = `${count} monitor${count !== 1 ? 's' : ''}`;
+        if (inPrivate > 0) detail += ` (${inPrivate} InPrivate)`;
+        detail += ` · ${urls}`;
+
+        html += `
+          <div class="config-card">
+            <div class="config-name">${escapeHtml(config.name)}</div>
+            <div class="config-detail">${escapeHtml(detail)}</div>
+            <div class="config-actions">
+              <button class="config-btn restore" data-config-id="${config.id}">▶ Restore</button>
+              <button class="config-btn delete" data-config-id="${config.id}">✕ Delete</button>
+            </div>
+          </div>
+        `;
+      }
+      configsList.innerHTML = html;
+
+      configsList.querySelectorAll('.config-btn.restore').forEach(btn => {
+        btn.addEventListener('click', () => {
+          btn.disabled = true;
+          btn.textContent = 'Restoring...';
+          chrome.runtime.sendMessage({ action: 'restoreConfig', configId: btn.dataset.configId }, () => {
+            btn.disabled = false;
+            btn.textContent = '▶ Restore';
+            loadMonitors();
+          });
+        });
+      });
+
+      configsList.querySelectorAll('.config-btn.delete').forEach(btn => {
+        btn.addEventListener('click', () => {
+          chrome.runtime.sendMessage({ action: 'deleteConfig', configId: btn.dataset.configId }, () => {
+            loadSavedConfigs();
+          });
+        });
+      });
+    });
+  }
+
   // Initial load
   loadMonitors();
   loadHistory();
+  loadSavedConfigs();
   
   // Refresh periodically
   updateInterval = setInterval(() => {

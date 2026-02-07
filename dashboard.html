@@ -316,18 +316,86 @@
     .auto-scroll-indicator.inactive:hover {
       background: #666;
     }
+    /* Saved Configurations */
+    .saved-configs-section {
+      margin-top: 15px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      padding-top: 12px;
+      display: none;
+    }
+    .saved-configs-section h2 {
+      font-size: 14px;
+      margin: 0 0 10px 0;
+      color: #aaa;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .config-card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 8px;
+      border-left: 3px solid #4caf50;
+    }
+    .config-card .config-name {
+      font-size: 13px;
+      font-weight: bold;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+    .config-card .config-detail {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 8px;
+    }
+    .config-card .config-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .config-card .config-btn {
+      padding: 4px 12px;
+      border: none;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .config-btn.restore {
+      background: #4caf50;
+      color: #fff;
+    }
+    .config-btn.restore:hover {
+      background: #66bb6a;
+    }
+    .config-btn.delete {
+      background: #666;
+      color: #fff;
+    }
+    .config-btn.delete:hover {
+      background: #888;
+    }
   </style>
 </head>
 <body>
   <div class="dashboard-header">
     <h1>🐕 Watch Dog Dashboard</h1>
     <div class="header-actions">
+      <button id="saveConfigBtn" class="btn btn-secondary" style="display:none;">💾 Save Config</button>
       <button id="stopAllBtn" class="btn btn-danger" style="display:none;">Stop All Monitors</button>
     </div>
   </div>
 
   <div class="dashboard-layout">
     <div class="panel-monitors">
+      <!-- Saved Configurations -->
+      <div class="saved-configs-section" id="savedConfigsSection">
+        <h2>
+          <span>💾 Saved Configs (<span id="configCount">0</span>)</span>
+        </h2>
+        <div id="configsList"></div>
+      </div>
+
       <!-- Active Monitors -->
       <div class="section" id="monitorsSection">
         <h2>
