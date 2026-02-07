@@ -50,23 +50,15 @@ function normalizeUrl(url) {
 
 async function saveWindowGeometry(url, geometry) {
   const key = normalizeUrl(url);
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['windowGeometries'], (result) => {
-      const geometries = result.windowGeometries || {};
-      geometries[key] = { left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height };
-      chrome.storage.local.set({ windowGeometries: geometries }, resolve);
-    });
-  });
+  const { windowGeometries = {} } = await chrome.storage.local.get('windowGeometries');
+  windowGeometries[key] = { left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height };
+  await chrome.storage.local.set({ windowGeometries });
 }
 
 async function getWindowGeometry(url) {
   const key = normalizeUrl(url);
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['windowGeometries'], (result) => {
-      const geometries = result.windowGeometries || {};
-      resolve(geometries[key] || null);
-    });
-  });
+  const { windowGeometries = {} } = await chrome.storage.local.get('windowGeometries');
+  return windowGeometries[key] || null;
 }
 
 async function ensureOffscreenDocument() {
@@ -119,31 +111,21 @@ async function stopAlarmSound() {
 
 // Helper to get monitors object from storage (keyed by monitorId)
 async function getMonitors() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['monitors'], (result) => {
-      resolve(result.monitors || {});
-    });
-  });
+  const { monitors = {} } = await chrome.storage.local.get('monitors');
+  return monitors;
 }
 
 async function saveMonitors(monitors) {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ monitors }, resolve);
-  });
+  await chrome.storage.local.set({ monitors });
 }
 
 async function getHistory() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['history'], (result) => {
-      resolve(result.history || []);
-    });
-  });
+  const { history = [] } = await chrome.storage.local.get('history');
+  return history;
 }
 
 async function saveHistory(history) {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ history }, resolve);
-  });
+  await chrome.storage.local.set({ history });
 }
 
 async function addToHistory(monitor) {
@@ -156,22 +138,12 @@ async function addToHistory(monitor) {
   await saveHistory(history);
 }
 
-// Get all monitors for a specific tab (pass monitors to avoid redundant storage read)
-async function getMonitorsForTab(tabId, monitors) {
+// Get active (not found) monitors for a tab
+async function getActiveMonitorsForTab(tabId, monitors) {
   if (!monitors) monitors = await getMonitors();
   const result = {};
   for (const [id, monitor] of Object.entries(monitors)) {
-    if (monitor.tabId === tabId) result[id] = monitor;
-  }
-  return result;
-}
-
-// Get active (not found) monitors for a tab
-async function getActiveMonitorsForTab(tabId, monitors) {
-  const tabMonitors = await getMonitorsForTab(tabId, monitors);
-  const result = {};
-  for (const [id, monitor] of Object.entries(tabMonitors)) {
-    if (!monitor.found) result[id] = monitor;
+    if (monitor.tabId === tabId && !monitor.found) result[id] = monitor;
   }
   return result;
 }
@@ -431,9 +403,7 @@ async function checkForStuckMonitors() {
   
   if (tabsToRefresh.size === 0) return;
   
-  // Re-read monitors once for all updates
-  const currentMonitors = await getMonitors();
-  let monitorsChanged = false;
+  let changed = false;
   
   for (const tabId of tabsToRefresh) {
     try {
@@ -442,25 +412,25 @@ async function checkForStuckMonitors() {
       
       // Find shortest interval & update nextRefreshTime in one pass
       let shortestInterval = 15;
-      for (const m of Object.values(currentMonitors)) {
+      for (const m of Object.values(monitors)) {
         if (m.tabId === tabId && !m.found && m.interval < shortestInterval) shortestInterval = m.interval;
       }
       const newTime = Date.now() + (shortestInterval * 1000) + 5000;
-      for (const [id, m] of Object.entries(currentMonitors)) {
-        if (m.tabId === tabId && !m.found) { currentMonitors[id].nextRefreshTime = newTime; monitorsChanged = true; }
+      for (const [id, m] of Object.entries(monitors)) {
+        if (m.tabId === tabId && !m.found) { monitors[id].nextRefreshTime = newTime; changed = true; }
       }
       
       chrome.tabs.reload(tabId);
     } catch (e) {
       wdLog('Stuck tab no longer exists, cleaning up:', tabId);
-      for (const [id, m] of Object.entries(currentMonitors)) {
-        if (m.tabId === tabId) { delete currentMonitors[id]; monitorsChanged = true; }
+      for (const [id, m] of Object.entries(monitors)) {
+        if (m.tabId === tabId) { delete monitors[id]; changed = true; }
       }
       clearTabTimer(tabId);
     }
   }
   
-  if (monitorsChanged) await saveMonitors(currentMonitors);
+  if (changed) await saveMonitors(monitors);
 }
 
 // Start the watchdog timer
@@ -610,7 +580,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await saveMonitors(monitors);
         
         // Reschedule or clear timer for this tab
-        const remaining = await getActiveMonitorsForTab(tabId);
+        const remaining = await getActiveMonitorsForTab(tabId, monitors);
         if (Object.keys(remaining).length === 0) {
           clearTabTimer(tabId);
         } else {
@@ -676,7 +646,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             await chrome.tabs.sendMessage(mTabId, { action: 'dismissOverlay', monitorId });
           } catch (e) {}
           
-          const remaining = await getActiveMonitorsForTab(mTabId);
+          const remaining = await getActiveMonitorsForTab(mTabId, monitors);
           if (Object.keys(remaining).length === 0) {
             clearTabTimer(mTabId);
           }
@@ -704,18 +674,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'getStatus') {
     (async () => {
       const senderTabId = sender.tab ? sender.tab.id : null;
-      const tabMonitors = senderTabId ? await getMonitorsForTab(senderTabId) : {};
-      const activeMonitors = {};
-      
-      for (const [id, monitor] of Object.entries(tabMonitors)) {
-        if (!monitor.found) {
-          activeMonitors[id] = monitor;
-        }
-      }
-      
-      const isMonitored = Object.keys(activeMonitors).length > 0;
-      
-      sendResponse({ isMonitored, monitors: activeMonitors });
+      const activeMonitors = senderTabId ? await getActiveMonitorsForTab(senderTabId) : {};
+      sendResponse({ isMonitored: Object.keys(activeMonitors).length > 0, monitors: activeMonitors });
     })();
     return true;
     
@@ -798,31 +758,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           isIncognito: m.isIncognito || false
         }))
       };
-      const { savedConfigs = [] } = await new Promise(resolve =>
-        chrome.storage.local.get(['savedConfigs'], resolve)
-      );
+      const { savedConfigs = [] } = await chrome.storage.local.get('savedConfigs');
       savedConfigs.push(config);
       // Keep max 20 configs
       if (savedConfigs.length > 20) savedConfigs.splice(0, savedConfigs.length - 20);
-      await new Promise(resolve => chrome.storage.local.set({ savedConfigs }, resolve));
+      await chrome.storage.local.set({ savedConfigs });
       wdLog('Saved config "' + config.name + '" with', config.monitors.length, 'monitor(s)');
       sendResponse({ status: 'saved', config });
     })();
     return true;
 
   } else if (message.action === 'getSavedConfigs') {
-    chrome.storage.local.get(['savedConfigs'], (result) => {
-      sendResponse({ configs: result.savedConfigs || [] });
-    });
+    (async () => {
+      const { savedConfigs = [] } = await chrome.storage.local.get('savedConfigs');
+      sendResponse({ configs: savedConfigs });
+    })();
     return true;
 
   } else if (message.action === 'deleteConfig') {
     (async () => {
-      const { savedConfigs = [] } = await new Promise(resolve =>
-        chrome.storage.local.get(['savedConfigs'], resolve)
-      );
+      const { savedConfigs = [] } = await chrome.storage.local.get('savedConfigs');
       const updated = savedConfigs.filter(c => c.id !== message.configId);
-      await new Promise(resolve => chrome.storage.local.set({ savedConfigs: updated }, resolve));
+      await chrome.storage.local.set({ savedConfigs: updated });
       wdLog('Deleted config:', message.configId);
       sendResponse({ status: 'deleted' });
     })();
@@ -830,9 +787,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   } else if (message.action === 'restoreConfig') {
     (async () => {
-      const { savedConfigs = [] } = await new Promise(resolve =>
-        chrome.storage.local.get(['savedConfigs'], resolve)
-      );
+      const { savedConfigs = [] } = await chrome.storage.local.get('savedConfigs');
       const config = savedConfigs.find(c => c.id === message.configId);
       if (!config) {
         sendResponse({ status: 'not_found' });
@@ -1143,8 +1098,9 @@ chrome.windows.onRemoved.addListener((windowId) => {
 // Rebuild incognitoWindowUrls map on service worker startup
 async function rebuildIncognitoWindowMap() {
   const monitors = await getMonitors();
-  for (const monitor of Object.values(monitors)) {
-    if (!monitor.isIncognito || monitor.found) continue;
+  const incognitoMonitors = Object.values(monitors).filter(m => m.isIncognito && !m.found);
+  
+  await Promise.allSettled(incognitoMonitors.map(async (monitor) => {
     try {
       const tab = await chrome.tabs.get(monitor.tabId);
       if (tab.windowId && !incognitoWindowUrls.has(tab.windowId)) {
@@ -1153,7 +1109,8 @@ async function rebuildIncognitoWindowMap() {
     } catch (e) {
       // Tab no longer exists
     }
-  }
+  }));
+  
   if (incognitoWindowUrls.size > 0) {
     wdLog('Rebuilt InPrivate window map:', incognitoWindowUrls.size, 'window(s)');
   }
