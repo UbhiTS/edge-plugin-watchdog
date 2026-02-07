@@ -32,6 +32,40 @@ function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
+// --- InPrivate Window Geometry Persistence ---
+// Maps InPrivate windowId -> normalized URL (for onBoundsChanged lookups)
+const incognitoWindowUrls = new Map();
+
+function normalizeUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname.replace(/\/$/, '');
+  } catch (e) {
+    return url;
+  }
+}
+
+async function saveWindowGeometry(url, geometry) {
+  const key = normalizeUrl(url);
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['windowGeometries'], (result) => {
+      const geometries = result.windowGeometries || {};
+      geometries[key] = { left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height };
+      chrome.storage.local.set({ windowGeometries: geometries }, resolve);
+    });
+  });
+}
+
+async function getWindowGeometry(url) {
+  const key = normalizeUrl(url);
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['windowGeometries'], (result) => {
+      const geometries = result.windowGeometries || {};
+      resolve(geometries[key] || null);
+    });
+  });
+}
+
 async function ensureOffscreenDocument() {
   const offscreenUrl = chrome.runtime.getURL('offscreen.html');
   
@@ -197,10 +231,15 @@ async function handleErrorPageRetry(tabId, url) {
     wdLog('Closing', windowIds.length, 'InPrivate window(s) for full session reset');
     
     // 2) Mark all affected tabs so onRemoved won't delete their monitors
-    for (const info of Object.values(windowInfoMap)) {
+    //    Also save current geometry for each window's URL before closing
+    for (const [winIdStr, info] of Object.entries(windowInfoMap)) {
       for (const { monitor } of info.monitors) {
         tabsBeingReset.add(monitor.tabId);
         clearTabTimer(monitor.tabId);
+      }
+      // Persist the current geometry for this URL
+      if (info.monitors.length > 0) {
+        await saveWindowGeometry(info.monitors[0].monitor.url, info.geometry);
       }
     }
     
@@ -237,18 +276,26 @@ async function handleErrorPageRetry(tabId, url) {
       // Reopen one window per original tab group
       for (const [origTabIdStr, tabInfo] of Object.entries(monitorsByOrigTab)) {
         try {
+          // Use saved geometry if available, otherwise fall back to the geometry captured before close
+          const savedGeometry = await getWindowGeometry(tabInfo.url);
+          const useGeometry = savedGeometry || geometry;
+
           const newWindow = await chrome.windows.create({
             url: tabInfo.url,
             incognito: true,
             focused: false,
-            left: geometry.left,
-            top: geometry.top,
-            width: geometry.width,
-            height: geometry.height
+            left: useGeometry.left,
+            top: useGeometry.top,
+            width: useGeometry.width,
+            height: useGeometry.height
           });
           
           const newTabId = newWindow.tabs[0].id;
-          wdLog('Reopened InPrivate window at', JSON.stringify(geometry), 'with tab:', newTabId);
+
+          // Track this window for geometry updates
+          incognitoWindowUrls.set(newWindow.id, tabInfo.url);
+
+          wdLog('Reopened InPrivate window at', JSON.stringify(useGeometry), 'with tab:', newTabId);
           
           // Update monitors to point to the new tab
           for (const { id, monitor } of tabInfo.monitors) {
@@ -500,13 +547,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const url = monitor.url;
       
       try {
-        // Open InPrivate window
-        const newWindow = await chrome.windows.create({
+        // Look up saved geometry for this URL
+        const savedGeometry = await getWindowGeometry(url);
+        const createOpts = {
           url: url,
           incognito: true,
           focused: false
-        });
+        };
+        if (savedGeometry) {
+          createOpts.left = savedGeometry.left;
+          createOpts.top = savedGeometry.top;
+          createOpts.width = savedGeometry.width;
+          createOpts.height = savedGeometry.height;
+          wdLog('Restoring saved geometry for InPrivate window:', JSON.stringify(savedGeometry));
+        }
+
+        // Open InPrivate window
+        const newWindow = await chrome.windows.create(createOpts);
         const newTabId = newWindow.tabs[0].id;
+
+        // Track this window for geometry updates
+        incognitoWindowUrls.set(newWindow.id, url);
+
+        // Save current geometry (in case it's brand new or defaults changed)
+        if (!savedGeometry) {
+          await saveWindowGeometry(url, { left: newWindow.left, top: newWindow.top, width: newWindow.width, height: newWindow.height });
+        }
         
         // Update monitor
         monitors[monitorId].tabId = newTabId;
@@ -944,3 +1010,44 @@ chrome.webNavigation.onErrorOccurred.addListener(async (details) => {
   const result = await handleErrorPageRetry(tabId, targetUrl);
   wdLog('Navigation error retry result:', result);
 });
+
+// --- InPrivate Window Geometry Tracking ---
+
+// When an InPrivate window is moved or resized, persist the new geometry
+chrome.windows.onBoundsChanged.addListener(async (window) => {
+  const url = incognitoWindowUrls.get(window.id);
+  if (!url) return; // Not a tracked InPrivate window
+
+  const geometry = { left: window.left, top: window.top, width: window.width, height: window.height };
+  await saveWindowGeometry(url, geometry);
+  wdLog('Updated geometry for InPrivate window', window.id, ':', JSON.stringify(geometry));
+});
+
+// Clean up tracking map when an InPrivate window is closed
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (incognitoWindowUrls.has(windowId)) {
+    incognitoWindowUrls.delete(windowId);
+  }
+});
+
+// Rebuild incognitoWindowUrls map on service worker startup
+async function rebuildIncognitoWindowMap() {
+  const monitors = await getMonitors();
+  for (const monitor of Object.values(monitors)) {
+    if (!monitor.isIncognito || monitor.found) continue;
+    try {
+      const tab = await chrome.tabs.get(monitor.tabId);
+      if (tab.windowId && !incognitoWindowUrls.has(tab.windowId)) {
+        incognitoWindowUrls.set(tab.windowId, monitor.url);
+      }
+    } catch (e) {
+      // Tab no longer exists
+    }
+  }
+  if (incognitoWindowUrls.size > 0) {
+    wdLog('Rebuilt InPrivate window map:', incognitoWindowUrls.size, 'window(s)');
+  }
+}
+
+// Run on service worker script evaluation (covers both startup and wake-up)
+rebuildIncognitoWindowMap();
