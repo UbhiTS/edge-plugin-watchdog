@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Watch Dog 🐕 - Dashboard</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      min-height: 100vh;
+    }
+    .dashboard-header {
+      background: rgba(0,0,0,0.3);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .dashboard-header h1 {
+      font-size: 20px;
+      margin: 0;
+      color: #76b900;
+    }
+    .dashboard-header .header-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .dashboard-layout {
+      display: flex;
+      height: calc(100vh - 60px);
+    }
+
+    /* Left panel: monitors */
+    .panel-monitors {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      min-width: 200px;
+    }
+
+    /* Resize handle between panels */
+    .resize-handle {
+      width: 5px;
+      cursor: col-resize;
+      background: rgba(255,255,255,0.08);
+      transition: background 0.2s;
+      flex-shrink: 0;
+      position: relative;
+    }
+    .resize-handle:hover,
+    .resize-handle.dragging {
+      background: #76b900;
+    }
+    .resize-handle::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 3px;
+      height: 40px;
+      border-left: 1px solid rgba(255,255,255,0.2);
+      border-right: 1px solid rgba(255,255,255,0.2);
+    }
+
+    /* Right panel: console logs */
+    .panel-console {
+      width: 50%;
+      min-width: 200px;
+      max-width: 80%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-console.collapsed {
+      width: 40px;
+      min-width: 40px;
+    }
+    .panel-console.collapsed + .resize-handle,
+    .resize-handle:has(+ .panel-console.collapsed) {
+      display: none;
+    }
+    .console-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(0,0,0,0.3);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      flex-shrink: 0;
+    }
+    .console-header h2 {
+      font-size: 14px;
+      margin: 0;
+      color: #aaa;
+    }
+    .console-header .console-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .console-filter {
+      padding: 4px 8px;
+      border: none;
+      border-radius: 4px;
+      background: #2a2a4a;
+      color: #fff;
+      font-size: 11px;
+    }
+    .console-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      background: rgba(0,0,0,0.2);
+    }
+    .panel-console.collapsed .console-header h2,
+    .panel-console.collapsed .console-actions,
+    .panel-console.collapsed .console-body {
+      display: none;
+    }
+    .panel-console.collapsed .console-header {
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      padding: 14px 10px;
+      cursor: pointer;
+    }
+    .panel-console.collapsed .console-toggle-label {
+      display: block;
+      color: #aaa;
+      font-size: 12px;
+    }
+    .console-toggle-label {
+      display: none;
+    }
+    .log-entry {
+      padding: 3px 6px;
+      border-radius: 3px;
+      margin-bottom: 2px;
+      word-break: break-all;
+      white-space: pre-wrap;
+    }
+    .log-entry.log-info { color: #8ec8f0; }
+    .log-entry.log-warn { color: #f0c040; background: rgba(240, 192, 64, 0.08); }
+    .log-entry.log-error { color: #ff6b6b; background: rgba(255, 68, 68, 0.08); }
+    .log-entry .log-time { color: #666; margin-right: 8px; font-size: 10px; }
+    .log-entry .log-source { color: #9c27b0; margin-right: 6px; font-size: 10px; }
+    .no-logs {
+      text-align: center;
+      padding: 40px 20px;
+      color: #555;
+      font-size: 13px;
+    }
+
+    /* Section styles */
+    .section {
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+    }
+    .section h2 {
+      font-size: 15px;
+      margin: 0 0 14px 0;
+      color: #aaa;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Monitors list (reuse popup styles with tweaks) */
+    .tab-group {
+      background: rgba(255,255,255,0.03);
+      border-radius: 10px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .tab-header {
+      padding: 8px 14px;
+      background: rgba(255,255,255,0.05);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      font-size: 12px;
+      color: #888;
+    }
+    .monitor-card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 8px;
+      border-left: 3px solid #76b900;
+    }
+    .monitor-card.found {
+      border-left-color: #00ff00;
+      background: rgba(0, 255, 0, 0.08);
+    }
+    .monitor-card.incognito {
+      border-left: 3px solid #9c27b0;
+    }
+    .monitor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+    .monitor-badges {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .monitor-search-text {
+      font-size: 14px;
+      font-weight: bold;
+      color: #fff;
+      flex: 1;
+      word-break: break-word;
+    }
+    .monitor-status {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+    .monitor-status.inprivate-badge {
+      background: #9c27b0;
+      color: #fff;
+    }
+    .monitor-status.found {
+      background: #00ff00;
+      color: #000;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+    .monitor-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .monitor-countdown {
+      font-size: 13px;
+      color: #76b900;
+    }
+    .monitor-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .monitor-btn {
+      padding: 5px 12px;
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .monitor-btn.stop { background: #ff4444; color: #fff; }
+    .monitor-btn.stop:hover { background: #ff6666; }
+    .monitor-btn.focus { background: #4488ff; color: #fff; }
+    .monitor-btn.focus:hover { background: #66aaff; }
+    .monitor-btn.inprivate { background: #9c27b0; color: #fff; }
+    .monitor-btn.inprivate:hover { background: #ba68c8; }
+
+    /* History */
+    .history-card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 8px;
+      border-left: 3px solid #999;
+    }
+    .history-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 4px;
+    }
+    .history-search-text {
+      font-size: 13px;
+      font-weight: bold;
+      color: #ddd;
+      flex: 1;
+      word-break: break-word;
+    }
+    .history-time {
+      font-size: 11px;
+      color: #aaa;
+      margin-bottom: 4px;
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 6px 14px;
+      border: none;
+      border-radius: 5px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-danger { background: #ff4444; color: #fff; }
+    .btn-danger:hover { background: #ff6666; }
+    .btn-secondary { background: #444; color: #fff; }
+    .btn-secondary:hover { background: #666; }
+    .btn-primary { background: #76b900; color: #fff; }
+    .btn-primary:hover { background: #8ed600; }
+
+    .no-monitors {
+      text-align: center;
+      padding: 40px;
+      color: #555;
+      font-size: 14px;
+    }
+
+    /* Auto-scroll indicator */
+    .auto-scroll-indicator {
+      font-size: 12px;
+      padding: 6px 14px;
+      border-radius: 5px;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+    }
+    .auto-scroll-indicator.active {
+      background: #444;
+      color: #76b900;
+    }
+    .auto-scroll-indicator.active:hover {
+      background: #666;
+    }
+    .auto-scroll-indicator.inactive {
+      background: #444;
+      color: #aaa;
+    }
+    .auto-scroll-indicator.inactive:hover {
+      background: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard-header">
+    <h1>🐕 Watch Dog Dashboard</h1>
+    <div class="header-actions">
+      <button id="stopAllBtn" class="btn btn-danger" style="display:none;">Stop All Monitors</button>
+    </div>
+  </div>
+
+  <div class="dashboard-layout">
+    <div class="panel-monitors">
+      <!-- Active Monitors -->
+      <div class="section" id="monitorsSection">
+        <h2>
+          <span>📋 Active Monitors (<span id="monitorCount">0</span>)</span>
+        </h2>
+        <div id="monitorsList"></div>
+      </div>
+
+      <!-- History -->
+      <div class="section" id="historySection" style="display:none;">
+        <h2>
+          <span>📜 History (<span id="historyCount">0</span>)</span>
+          <button id="clearHistoryBtn" class="btn btn-secondary">Clear All</button>
+        </h2>
+        <div id="historyList"></div>
+      </div>
+    </div>
+
+    <div class="resize-handle" id="resizeHandle"></div>
+    <div class="panel-console" id="consolePanel">
+      <div class="console-header">
+        <h2>🖥️ Console Logs</h2>
+        <span class="console-toggle-label">🖥️ Console</span>
+        <div class="console-actions">
+          <select id="logFilter" class="console-filter">
+            <option value="all">All</option>
+            <option value="background">Background</option>
+            <option value="content">Content</option>
+          </select>
+          <span id="autoScrollToggle" class="auto-scroll-indicator active" title="Toggle auto-scroll">⬇ Auto</span>
+          <button id="clearLogsBtn" class="btn btn-secondary">Clear</button>
+          <button id="toggleConsoleBtn" class="btn btn-secondary">◀</button>
+        </div>
+      </div>
+      <div class="console-body" id="consoleBody">
+        <div class="no-logs">No logs yet. Logs will appear as the extension runs.</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

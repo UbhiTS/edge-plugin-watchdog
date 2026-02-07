@@ -5,10 +5,27 @@ let creatingOffscreen = false;
 // In-memory timers for each tab (one timer per tab, uses shortest interval)
 const refreshTimers = new Map();
 
+// Tabs being intentionally closed for InPrivate session reset (don't clean up monitors)
+const tabsBeingReset = new Set();
+
 // Watchdog timer to detect stuck refreshes
 let stuckWatchdogTimer = null;
 const STUCK_THRESHOLD_MS = 30000; // Consider stuck if 30 seconds past expected refresh
 const WATCHDOG_CHECK_INTERVAL_MS = 10000; // Check every 10 seconds
+
+// --- Console Log Capture ---
+const MAX_LOG_ENTRIES = 500;
+let logBuffer = [];
+
+function wdLog(...args) {
+  const message = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+  const entry = { timestamp: Date.now(), message, source: 'background', level: 'info' };
+  logBuffer.push(entry);
+  if (logBuffer.length > MAX_LOG_ENTRIES) {
+    logBuffer = logBuffer.slice(-MAX_LOG_ENTRIES);
+  }
+  console.log('[WD:background]', ...args);
+}
 
 // Generate unique ID
 function generateId() {
@@ -38,7 +55,7 @@ async function ensureOffscreenDocument() {
       justification: 'Play alarm sound when search text is found'
     });
   } catch (e) {
-    console.log('Offscreen document may already exist:', e);
+    wdLog('Offscreen document may already exist:', e);
   }
   creatingOffscreen = false;
 }
@@ -52,9 +69,9 @@ async function stopAlarmSound() {
   try {
     chrome.runtime.sendMessage({ action: 'stopAlarm' });
     await chrome.offscreen.closeDocument();
-    console.log('Offscreen document closed');
+    wdLog('Offscreen document closed');
   } catch (e) {
-    console.log('Error stopping alarm:', e);
+    wdLog('Error stopping alarm:', e);
   }
 }
 
@@ -121,120 +138,151 @@ async function getActiveMonitorsForTab(tabId) {
   return result;
 }
 
-// Calculate exponential backoff delay (in ms)
-// Cycle 1: 5s, Cycle 2: 10s, Cycle 3: 20s, Cycle 4: 40s, max 2 minutes
-function getBackoffDelay(cycleCount) {
-  const baseDelay = 5000; // 5 seconds
-  const maxDelay = 120000; // 2 minutes max
-  const delay = Math.min(baseDelay * Math.pow(2, cycleCount - 1), maxDelay);
-  return delay;
-}
-
-// Check if InPrivate fallback is enabled
-async function isInPrivateEnabled() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['useInPrivate'], (result) => {
-      // Default to true if not set
-      resolve(result.useInPrivate !== false);
-    });
-  });
-}
-
-// Handle error page by opening/cycling InPrivate window
-// This will close existing InPrivate windows and open fresh ones
-async function handleErrorWithInPrivate(tabId, url) {
-  // Check if InPrivate fallback is enabled
-  const inPrivateEnabled = await isInPrivateEnabled();
-  if (!inPrivateEnabled) {
-    console.log('InPrivate fallback is disabled, scheduling regular refresh');
-    await scheduleRefreshForTab(tabId);
-    return { status: 'disabled' };
-  }
-  
+// Handle error page by retrying - for InPrivate tabs, close ALL InPrivate windows
+// and reopen them to fully reset the session (cookies, cache, connections).
+// All InPrivate windows share one session, so they must all be closed to reset.
+async function handleErrorPageRetry(tabId, url) {
   const activeTabMonitors = await getActiveMonitorsForTab(tabId);
   
   if (Object.keys(activeTabMonitors).length === 0) {
-    console.log('No active monitors for tab', tabId, ', skipping InPrivate fallback');
+    wdLog('No active monitors for tab', tabId, ', ignoring error');
     return { status: 'skipped' };
   }
   
-  // Check if the current tab is already an InPrivate tab
+  // Get the original URL from monitors
   const firstMonitor = Object.values(activeTabMonitors)[0];
-  const wasAlreadyIncognito = firstMonitor?.isIncognito || false;
-  const cycleCount = (firstMonitor?.incognitoCycleCount || 0) + 1;
-  const lastCycleTime = firstMonitor?.lastCycleTime || 0;
+  const originalUrl = firstMonitor?.url || url;
+  const isIncognito = firstMonitor?.isIncognito || false;
   
-  // Calculate required delay based on cycle count
-  const requiredDelay = getBackoffDelay(cycleCount);
-  
-  console.log(`InPrivate cycle #${cycleCount} - Previous was incognito: ${wasAlreadyIncognito}, backoff: ${Math.round(requiredDelay/1000)}s`);
-  
-  // FIRST: Close the error tab/window immediately
-  clearTabTimer(tabId);
-  try {
-    if (wasAlreadyIncognito) {
-      const tab = await chrome.tabs.get(tabId);
-      await chrome.windows.remove(tab.windowId);
-      console.log('Closed old InPrivate window');
-    } else {
-      await chrome.tabs.remove(tabId);
-      console.log('Closed original error tab');
-    }
-  } catch (e) {
-    console.log('Could not close old tab/window:', e);
-  }
-  
-  // Update monitors to indicate they're in backoff state (no tab assigned temporarily)
-  const monitors = await getMonitors();
-  for (const [id, monitor] of Object.entries(activeTabMonitors)) {
-    if (monitors[id]) {
-      monitors[id].tabId = -1; // Temporarily no tab
-      monitors[id].isIncognito = true;
-      monitors[id].incognitoCycleCount = cycleCount;
-      monitors[id].lastCycleTime = Date.now();
-      monitors[id].nextRefreshTime = Date.now() + requiredDelay;
-      monitors[id].inBackoff = true;
-    }
-  }
-  await saveMonitors(monitors);
-  
-  // THEN: Wait for backoff period before opening new window
-  console.log(`Backoff: Waiting ${Math.round(requiredDelay/1000)}s before opening new InPrivate window (cycle #${cycleCount})`);
-  
-  setTimeout(async () => {
-    try {
-      // Open a fresh InPrivate window after backoff
-      const newWindow = await chrome.windows.create({
-        url: url,
-        incognito: true,
-        focused: false
-      });
+  if (isIncognito) {
+    // All InPrivate windows share one session - must close ALL to truly reset.
+    // Collect every InPrivate monitor, snapshot each window's size/position, then
+    // close all InPrivate windows and reopen them all at the same geometry.
+    wdLog('Error in InPrivate tab', tabId, '- resetting ALL InPrivate windows for fresh session');
+    
+    // 1) Find all InPrivate monitors
+    const allMonitors = await getMonitors();
+    // Group InPrivate monitors by their window, capturing window geometry
+    // Key: windowId, Value: { geometry, monitors: [{id, monitor}] }
+    const windowInfoMap = {};
+    
+    for (const [id, monitor] of Object.entries(allMonitors)) {
+      if (!monitor.isIncognito || monitor.found) continue;
       
-      const newTabId = newWindow.tabs[0].id;
-      console.log('Opened fresh InPrivate window with tab:', newTabId, 'after backoff, cycle:', cycleCount);
+      let windowId = null;
+      let geometry = null;
+      try {
+        const tab = await chrome.tabs.get(monitor.tabId);
+        windowId = tab.windowId;
+        const win = await chrome.windows.get(windowId);
+        geometry = { left: win.left, top: win.top, width: win.width, height: win.height };
+      } catch (e) {
+        wdLog('Could not get window info for monitor', id, ':', e);
+        continue;
+      }
       
-      // Update monitors with new tab
-      const currentMonitors = await getMonitors();
-      for (const [id, monitor] of Object.entries(activeTabMonitors)) {
-        if (currentMonitors[id]) {
-          currentMonitors[id].tabId = newTabId;
-          currentMonitors[id].url = url;
-          currentMonitors[id].inBackoff = false;
-          currentMonitors[id].nextRefreshTime = Date.now() + (monitor.interval * 1000) + 3000;
+      if (!windowInfoMap[windowId]) {
+        windowInfoMap[windowId] = { geometry, monitors: [] };
+      }
+      windowInfoMap[windowId].monitors.push({ id, monitor });
+    }
+    
+    const windowIds = Object.keys(windowInfoMap).map(Number);
+    if (windowIds.length === 0) {
+      wdLog('No InPrivate windows found to reset');
+      await scheduleRefreshForTab(tabId);
+      return { status: 'retrying' };
+    }
+    
+    wdLog('Closing', windowIds.length, 'InPrivate window(s) for full session reset');
+    
+    // 2) Mark all affected tabs so onRemoved won't delete their monitors
+    for (const info of Object.values(windowInfoMap)) {
+      for (const { monitor } of info.monitors) {
+        tabsBeingReset.add(monitor.tabId);
+        clearTabTimer(monitor.tabId);
+      }
+    }
+    
+    // 3) Close ALL InPrivate windows
+    for (const winId of windowIds) {
+      try {
+        await chrome.windows.remove(winId);
+        wdLog('Closed InPrivate window:', winId);
+      } catch (e) {
+        wdLog('Could not close InPrivate window', winId, ':', e);
+      }
+    }
+    
+    // Small delay to let all windows fully close (session destruction)
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    // 4) Reopen each window at its original size/position
+    const updatedMonitors = await getMonitors();
+    
+    for (const [winIdStr, info] of Object.entries(windowInfoMap)) {
+      const { geometry, monitors: winMonitors } = info;
+      
+      // Each original window had one tab with one URL - reopen it
+      // (grouped monitors on same tab share the same URL)
+      const monitorsByOrigTab = {};
+      for (const { id, monitor } of winMonitors) {
+        const origTabId = monitor.tabId;
+        if (!monitorsByOrigTab[origTabId]) {
+          monitorsByOrigTab[origTabId] = { url: monitor.url, monitors: [] };
+        }
+        monitorsByOrigTab[origTabId].monitors.push({ id, monitor });
+      }
+      
+      // Reopen one window per original tab group
+      for (const [origTabIdStr, tabInfo] of Object.entries(monitorsByOrigTab)) {
+        try {
+          const newWindow = await chrome.windows.create({
+            url: tabInfo.url,
+            incognito: true,
+            focused: false,
+            left: geometry.left,
+            top: geometry.top,
+            width: geometry.width,
+            height: geometry.height
+          });
+          
+          const newTabId = newWindow.tabs[0].id;
+          wdLog('Reopened InPrivate window at', JSON.stringify(geometry), 'with tab:', newTabId);
+          
+          // Update monitors to point to the new tab
+          for (const { id, monitor } of tabInfo.monitors) {
+            if (updatedMonitors[id]) {
+              updatedMonitors[id].tabId = newTabId;
+              updatedMonitors[id].nextRefreshTime = Date.now() + (monitor.interval * 1000) + 3000;
+            }
+          }
+          
+          await saveMonitors(updatedMonitors);
+          await scheduleRefreshForTab(newTabId);
+        } catch (e) {
+          wdLog('Failed to reopen InPrivate window:', e);
         }
       }
-      await saveMonitors(currentMonitors);
-      
-      // Schedule refresh for new tab
-      await scheduleRefreshForTab(newTabId);
-      
-      console.log(`Successfully opened new InPrivate tab after backoff (cycle #${cycleCount})`);
-    } catch (e) {
-      console.log('Failed to open InPrivate window after backoff:', e);
     }
-  }, requiredDelay);
-  
-  return { status: 'backoff-cycling', backoffDelay: requiredDelay, cycleCount };
+    
+    return { status: 'inprivate-full-reset', windowsReset: windowIds.length };
+  } else {
+    // Normal tab: just navigate back to the original URL
+    wdLog('Error page detected on tab', tabId, '- will retry with original URL:', originalUrl);
+    
+    try {
+      await chrome.tabs.update(tabId, { url: originalUrl });
+      wdLog('Navigated tab', tabId, 'back to original URL');
+    } catch (e) {
+      wdLog('Could not navigate tab back to original URL:', e);
+    }
+    
+    // Schedule refresh so monitoring continues
+    await scheduleRefreshForTab(tabId);
+    
+    return { status: 'retrying' };
+  }
 }
 
 // Clear timer for a specific tab
@@ -243,7 +291,7 @@ function clearTabTimer(tabId) {
   if (timer) {
     clearTimeout(timer);
     refreshTimers.delete(tabId);
-    console.log('Cleared timer for tab:', tabId);
+    wdLog('Cleared timer for tab:', tabId);
   }
 }
 
@@ -253,7 +301,7 @@ async function scheduleRefreshForTab(tabId) {
   const monitorIds = Object.keys(activeMonitors);
   
   if (monitorIds.length === 0) {
-    console.log('No active monitors for tab, not scheduling:', tabId);
+    wdLog('No active monitors for tab, not scheduling:', tabId);
     clearTabTimer(tabId);
     return;
   }
@@ -280,21 +328,21 @@ async function scheduleRefreshForTab(tabId) {
   }
   await saveMonitors(allMonitors);
   
-  console.log('Scheduling refresh for tab', tabId, 'in', shortestInterval, 'seconds');
+  wdLog('Scheduling refresh for tab', tabId, 'in', shortestInterval, 'seconds');
   
   const timer = setTimeout(async () => {
     const currentActive = await getActiveMonitorsForTab(tabId);
     if (Object.keys(currentActive).length === 0) {
-      console.log('No active monitors, not refreshing:', tabId);
+      wdLog('No active monitors, not refreshing:', tabId);
       return;
     }
     
     try {
       await chrome.tabs.get(tabId);
-      console.log('Refreshing tab:', tabId);
+      wdLog('Refreshing tab:', tabId);
       chrome.tabs.reload(tabId);
     } catch (e) {
-      console.log('Tab no longer exists, removing monitors:', tabId);
+      wdLog('Tab no longer exists, removing monitors:', tabId);
       const monitors = await getMonitors();
       for (const [id, monitor] of Object.entries(monitors)) {
         if (monitor.tabId === tabId) {
@@ -324,7 +372,7 @@ async function checkForStuckMonitors() {
       const timeSinceExpected = now - monitor.nextRefreshTime;
       
       if (timeSinceExpected > STUCK_THRESHOLD_MS) {
-        console.log('Monitor appears stuck:', id, 'Expected refresh was', Math.round(timeSinceExpected / 1000), 'seconds ago');
+        wdLog('Monitor appears stuck:', id, 'Expected refresh was', Math.round(timeSinceExpected / 1000), 'seconds ago');
         tabsToRefresh.add(monitor.tabId);
       }
     }
@@ -334,7 +382,7 @@ async function checkForStuckMonitors() {
   for (const tabId of tabsToRefresh) {
     try {
       await chrome.tabs.get(tabId);
-      console.log('Force refreshing stuck tab:', tabId);
+      wdLog('Force refreshing stuck tab:', tabId);
       
       // Update nextRefreshTime before refreshing to prevent repeated force refreshes
       const currentMonitors = await getMonitors();
@@ -359,7 +407,7 @@ async function checkForStuckMonitors() {
       // Reload the tab
       chrome.tabs.reload(tabId);
     } catch (e) {
-      console.log('Stuck tab no longer exists, cleaning up:', tabId);
+      wdLog('Stuck tab no longer exists, cleaning up:', tabId);
       const currentMonitors = await getMonitors();
       for (const [id, monitor] of Object.entries(currentMonitors)) {
         if (monitor.tabId === tabId) {
@@ -376,13 +424,13 @@ async function checkForStuckMonitors() {
 function startStuckWatchdog() {
   if (stuckWatchdogTimer) return; // Already running
   
-  console.log('Starting stuck monitor watchdog');
+  wdLog('Starting stuck monitor watchdog');
   stuckWatchdogTimer = setInterval(async () => {
     const monitors = await getMonitors();
     const hasActiveMonitors = Object.values(monitors).some(m => !m.found);
     
     if (!hasActiveMonitors) {
-      console.log('No active monitors, stopping watchdog');
+      wdLog('No active monitors, stopping watchdog');
       stopStuckWatchdog();
       return;
     }
@@ -396,12 +444,12 @@ function stopStuckWatchdog() {
   if (stuckWatchdogTimer) {
     clearInterval(stuckWatchdogTimer);
     stuckWatchdogTimer = null;
-    console.log('Stopped stuck monitor watchdog');
+    wdLog('Stopped stuck monitor watchdog');
   }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('Background received message:', message);
+  wdLog('Background received message:', message.action);
   
   if (message.action === 'startMonitoring') {
     (async () => {
@@ -412,6 +460,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         id: monitorId,
         tabId: message.tabId,
         searchText: message.searchText,
+        searchTerms: message.searchTerms || [{ term: message.searchText, operator: null }],
         interval: message.refreshInterval || 15,
         url: message.url || '',
         title: message.title || '',
@@ -423,7 +472,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
       
       await saveMonitors(monitors);
-      console.log('Started monitoring:', monitorId, monitors[monitorId]);
+      wdLog('Started monitoring:', monitorId, monitors[monitorId]);
       sendResponse({ status: 'started', monitorId });
     })();
     return true;
@@ -477,13 +526,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try {
           await chrome.tabs.remove(oldTabId);
         } catch (e) {
-          console.log('Could not close original tab:', e);
+          wdLog('Could not close original tab:', e);
         }
         
-        console.log('Enabled InPrivate for monitor:', monitorId, 'new tab:', newTabId);
+        wdLog('Enabled InPrivate for monitor:', monitorId, 'new tab:', newTabId);
         sendResponse({ status: 'enabled', newTabId });
       } catch (e) {
-        console.log('Failed to enable InPrivate:', e);
+        wdLog('Failed to enable InPrivate:', e);
         sendResponse({ status: 'error', message: e.message });
       }
     })();
@@ -509,7 +558,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } else {
           await scheduleRefreshForTab(tabId);
         }
-        console.log('Stopped monitor:', monitorId);
+        wdLog('Stopped monitor:', monitorId);
       }
       
       sendResponse({ status: 'stopped' });
@@ -541,13 +590,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       stopStuckWatchdog();
       
       await saveMonitors({});
-      console.log('All monitoring stopped');
+      wdLog('All monitoring stopped');
       sendResponse({ status: 'all stopped' });
     })();
     return true;
     
   } else if (message.action === 'stopAlarm') {
-    console.log('Stopping alarm sound...');
+    wdLog('Stopping alarm sound...');
     stopAlarmSound();
     
     (async () => {
@@ -608,7 +657,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       
       const isMonitored = Object.keys(activeMonitors).length > 0;
       
-      console.log('Status check for tab:', senderTabId, 'monitors:', Object.keys(activeMonitors).length);
+      wdLog('Status check for tab:', senderTabId, 'monitors:', Object.keys(activeMonitors).length);
       
       sendResponse({ 
         isMonitored,
@@ -650,9 +699,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
     
+  } else if (message.action === 'getLogs') {
+    const filter = message.filter || 'all';
+    let logs = logBuffer;
+    if (filter !== 'all') {
+      logs = logBuffer.filter(e => e.source === filter);
+    }
+    sendResponse({ logs });
+    return true;
+    
+  } else if (message.action === 'clearLogs') {
+    logBuffer = [];
+    sendResponse({ status: 'cleared' });
+    return true;
+    
+  } else if (message.action === 'appendLog') {
+    // Content scripts can send their logs here
+    const entry = {
+      timestamp: message.timestamp || Date.now(),
+      message: String(message.message || ''),
+      source: message.source || 'content',
+      level: message.level || 'info'
+    };
+    logBuffer.push(entry);
+    if (logBuffer.length > MAX_LOG_ENTRIES) {
+      logBuffer = logBuffer.slice(-MAX_LOG_ENTRIES);
+    }
+    sendResponse({ status: 'ok' });
+    return true;
+    
   } else if (message.action === 'found') {
     // Content found - includes monitorId and searchText
-    console.log('Content FOUND! Playing alarm...');
+    wdLog('Content FOUND! Playing alarm...');
     playAlarmSound();
     
     const foundAt = Date.now();
@@ -676,16 +754,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await chrome.windows.update(tab.windowId, { focused: true });
           // Focus the specific tab
           await chrome.tabs.update(tabId, { active: true });
-          console.log('Focused tab and window for found content');
+          wdLog('Focused tab and window for found content');
         } catch (e) {
-          console.log('Could not focus tab/window:', e);
+          wdLog('Could not focus tab/window:', e);
         }
         
         // Reschedule for remaining active monitors
         await scheduleRefreshForTab(tabId);
       }
       
-      console.log('Content FOUND - State saved for monitor:', monitorId);
+      wdLog('Content FOUND - State saved for monitor:', monitorId);
       sendResponse({ status: 'found', foundAt });
     })();
     return true;
@@ -703,13 +781,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'urlRedirected') {
     // URL was redirected (e.g., to error page with different URL)
     // Navigate back to original URL instead of triggering error fallback
-    console.log('URL redirected, navigating back to original URL...');
+    wdLog('URL redirected, navigating back to original URL...');
     (async () => {
       const senderTabId = sender.tab ? sender.tab.id : null;
       const originalUrl = message.originalUrl;
       
       if (!senderTabId || !originalUrl) {
-        console.log('Missing tabId or originalUrl for redirect recovery');
+        wdLog('Missing tabId or originalUrl for redirect recovery');
         sendResponse({ status: 'error', message: 'Missing tabId or originalUrl' });
         return;
       }
@@ -717,31 +795,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         // Navigate the tab back to the original URL
         await chrome.tabs.update(senderTabId, { url: originalUrl });
-        console.log('Navigated tab', senderTabId, 'back to original URL:', originalUrl);
+        wdLog('Navigated tab', senderTabId, 'back to original URL:', originalUrl);
         
         // Schedule refresh after navigation
         // Note: The content script will re-initialize after navigation
         sendResponse({ status: 'redirected', url: originalUrl });
       } catch (e) {
-        console.log('Failed to navigate to original URL:', e);
+        wdLog('Failed to navigate to original URL:', e);
         sendResponse({ status: 'error', message: e.message });
       }
     })();
     return true;
     
   } else if (message.action === 'errorPageDetected') {
-    console.log('Error page detected, attempting InPrivate fallback/cycle...');
+    wdLog('Error page detected, scheduling retry...');
     (async () => {
       const senderTabId = sender.tab ? sender.tab.id : null;
       const url = message.url;
       
       if (!senderTabId || !url) {
-        console.log('Missing tabId or URL for InPrivate fallback');
+        wdLog('Missing tabId or URL for error retry');
         sendResponse({ status: 'error', message: 'Missing tabId or URL' });
         return;
       }
       
-      const result = await handleErrorWithInPrivate(senderTabId, url);
+      const result = await handleErrorPageRetry(senderTabId, url);
       sendResponse(result);
     })();
     return true;
@@ -752,6 +830,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Listen for tab removal
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  // Skip cleanup if this tab is being intentionally reset (InPrivate session reset)
+  if (tabsBeingReset.has(tabId)) {
+    tabsBeingReset.delete(tabId);
+    wdLog('Tab', tabId, 'closed for InPrivate reset, keeping monitors');
+    return;
+  }
+  
   const monitors = await getMonitors();
   let changed = false;
   
@@ -766,13 +851,13 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
     await saveMonitors(monitors);
     clearTabTimer(tabId);
     stopAlarmSound();
-    console.log('Tab closed, removed monitors for tab:', tabId);
+    wdLog('Tab closed, removed monitors for tab:', tabId);
   }
 });
 
 // Restore timers on startup
 chrome.runtime.onStartup.addListener(async () => {
-  console.log('Service worker starting up, restoring timers...');
+  wdLog('Service worker starting up, restoring timers...');
   const monitors = await getMonitors();
   const tabIds = new Set();
   let hasActiveMonitors = false;
@@ -818,19 +903,19 @@ chrome.webNavigation.onErrorOccurred.addListener(async (details) => {
   const url = details.url;
   const error = details.error;
   
-  console.log('Navigation error detected:', error, 'for tab:', tabId, 'URL:', url);
+  wdLog('Navigation error detected:', error, 'for tab:', tabId, 'URL:', url);
   
   // Check if this tab has active monitors
   const tabMonitors = await getActiveMonitorsForTab(tabId);
   if (Object.keys(tabMonitors).length === 0) {
-    console.log('No active monitors for this tab, ignoring navigation error');
+    wdLog('No active monitors for this tab, ignoring navigation error');
     return;
   }
   
   // Avoid duplicate handling (within 10 seconds)
   const lastError = recentNavErrors.get(tabId);
   if (lastError && Date.now() - lastError < 10000) {
-    console.log('Ignoring duplicate navigation error for tab:', tabId);
+    wdLog('Ignoring duplicate navigation error for tab:', tabId);
     return;
   }
   recentNavErrors.set(tabId, Date.now());
@@ -842,7 +927,7 @@ chrome.webNavigation.onErrorOccurred.addListener(async (details) => {
     }
   }
   
-  console.log('Attempting InPrivate fallback/cycle for navigation error...');
+  wdLog('Scheduling retry for navigation error...');
   
   // Get the URL from one of the monitors if not available
   let targetUrl = url;
@@ -852,10 +937,10 @@ chrome.webNavigation.onErrorOccurred.addListener(async (details) => {
   }
   
   if (!targetUrl) {
-    console.log('No URL available for InPrivate fallback');
+    wdLog('No URL available for retry');
     return;
   }
   
-  const result = await handleErrorWithInPrivate(tabId, targetUrl);
-  console.log('Navigation error InPrivate result:', result);
+  const result = await handleErrorPageRetry(tabId, targetUrl);
+  wdLog('Navigation error retry result:', result);
 });

@@ -56,6 +56,78 @@
       font-size: 13px;
       cursor: pointer;
     }
+    
+    /* Search terms builder */
+    .terms-builder {
+      margin-bottom: 8px;
+    }
+    .term-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .term-row input[type="text"] {
+      flex: 1;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 5px;
+      background: #2a2a4a;
+      color: #fff;
+      font-size: 13px;
+    }
+    .term-row input[type="text"]::placeholder {
+      color: #666;
+    }
+    .operator-select {
+      padding: 6px 4px;
+      border: none;
+      border-radius: 5px;
+      background: #3a3a5a;
+      color: #76b900;
+      font-size: 11px;
+      font-weight: bold;
+      cursor: pointer;
+      min-width: 52px;
+      text-align: center;
+    }
+    .remove-term-btn {
+      padding: 4px 8px;
+      border: none;
+      border-radius: 5px;
+      background: rgba(255, 68, 68, 0.3);
+      color: #ff6666;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      line-height: 1;
+    }
+    .remove-term-btn:hover {
+      background: rgba(255, 68, 68, 0.5);
+    }
+    .add-term-btn {
+      padding: 5px 12px;
+      border: 1px dashed rgba(118, 185, 0, 0.4);
+      border-radius: 5px;
+      background: transparent;
+      color: #76b900;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      width: 100%;
+      margin-bottom: 8px;
+    }
+    .add-term-btn:hover {
+      background: rgba(118, 185, 0, 0.1);
+      border-color: #76b900;
+    }
+    .saved-config-hint {
+      font-size: 10px;
+      color: #76b900;
+      margin-bottom: 6px;
+      opacity: 0.8;
+    }
+    
     .add-btn {
       width: 100%;
       padding: 10px;
@@ -373,12 +445,17 @@
   </style>
 </head>
 <body>
-  <h1>Watch Dog 🐕 - Page Monitor</h1>
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <h1 style="margin:0;">Watch Dog 🐕 - Page Monitor</h1>
+    <button id="openDashboardBtn" title="Open full dashboard" style="padding:4px 10px; border:none; border-radius:5px; background:#2a2a4a; color:#76b900; font-size:16px; cursor:pointer; transition:all 0.2s;">⛶</button>
+  </div>
   
   <div class="add-section">
-    <div class="input-row">
-      <input type="text" id="searchText" placeholder="Search text (e.g., RTX 5090)">
+    <div id="savedConfigHint" class="saved-config-hint" style="display:none;"></div>
+    <div id="termsBuilder" class="terms-builder">
+      <!-- Term rows are added dynamically by popup.js -->
     </div>
+    <button id="addTermBtn" class="add-term-btn">+ Add another term (AND / OR)</button>
     <div class="input-row">
       <select id="interval">
         <option value="3">3 sec</option>

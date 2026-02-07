@@ -1,7 +1,8 @@
 document.addEventListener('DOMContentLoaded', () => {
   const addBtn = document.getElementById('addBtn');
   const stopAllBtn = document.getElementById('stopAllBtn');
-  const searchTextInput = document.getElementById('searchText');
+  const addTermBtn = document.getElementById('addTermBtn');
+  const termsBuilder = document.getElementById('termsBuilder');
   const intervalSelect = document.getElementById('interval');
   const monitorsSection = document.getElementById('monitorsSection');
   const monitorsList = document.getElementById('monitorsList');
@@ -11,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const historyList = document.getElementById('historyList');
   const historyCount = document.getElementById('historyCount');
   const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+  const savedConfigHint = document.getElementById('savedConfigHint');
 
   let currentTabId = null;
   let currentTabUrl = '';
@@ -19,6 +21,151 @@ document.addEventListener('DOMContentLoaded', () => {
   let initialFocusDone = false;
 
   console.log('Popup loaded');
+
+  // Open full dashboard
+  const openDashboardBtn = document.getElementById('openDashboardBtn');
+  if (openDashboardBtn) {
+    openDashboardBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+      window.close();
+    });
+  }
+
+  // --- Search Terms Builder ---
+
+  // Normalize URL for config storage (origin + pathname, no query/hash)
+  function normalizeUrl(url) {
+    try {
+      const u = new URL(url);
+      return u.origin + u.pathname.replace(/\/$/, '');
+    } catch (e) {
+      return url;
+    }
+  }
+
+  // Save the current search config for this URL
+  function saveSearchConfig(url, searchTerms, interval) {
+    const key = normalizeUrl(url);
+    chrome.storage.local.get(['urlSearchConfigs'], (result) => {
+      const configs = result.urlSearchConfigs || {};
+      configs[key] = { searchTerms, interval, savedAt: Date.now() };
+      // Keep only the most recent 100 configs
+      const keys = Object.keys(configs);
+      if (keys.length > 100) {
+        const sorted = keys.sort((a, b) => (configs[a].savedAt || 0) - (configs[b].savedAt || 0));
+        for (let i = 0; i < sorted.length - 100; i++) {
+          delete configs[sorted[i]];
+        }
+      }
+      chrome.storage.local.set({ urlSearchConfigs: configs });
+    });
+  }
+
+  // Load saved search config for this URL
+  function loadSearchConfig(url, callback) {
+    const key = normalizeUrl(url);
+    chrome.storage.local.get(['urlSearchConfigs'], (result) => {
+      const configs = result.urlSearchConfigs || {};
+      callback(configs[key] || null);
+    });
+  }
+
+  // Create a term row element
+  function createTermRow(operator, termValue) {
+    const row = document.createElement('div');
+    row.className = 'term-row';
+
+    const isFirst = termsBuilder.children.length === 0;
+
+    if (!isFirst) {
+      const opSelect = document.createElement('select');
+      opSelect.className = 'operator-select';
+      opSelect.innerHTML = '<option value="AND">AND</option><option value="OR">OR</option>';
+      opSelect.value = operator || 'AND';
+      row.appendChild(opSelect);
+    }
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = isFirst ? 'Search text (e.g., RTX 5090)' : 'Another term...';
+    input.value = termValue || '';
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        startMonitoring();
+      }
+    });
+    row.appendChild(input);
+
+    if (!isFirst) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-term-btn';
+      removeBtn.textContent = '✕';
+      removeBtn.title = 'Remove this term';
+      removeBtn.addEventListener('click', () => {
+        row.remove();
+      });
+      row.appendChild(removeBtn);
+    }
+
+    return row;
+  }
+
+  // Add the first empty term row
+  function initTermsBuilder() {
+    termsBuilder.innerHTML = '';
+    termsBuilder.appendChild(createTermRow(null, ''));
+  }
+
+  // Populate terms builder from a saved config
+  function populateTerms(searchTerms, interval) {
+    termsBuilder.innerHTML = '';
+    if (!searchTerms || searchTerms.length === 0) {
+      initTermsBuilder();
+      return;
+    }
+    for (let i = 0; i < searchTerms.length; i++) {
+      const t = searchTerms[i];
+      termsBuilder.appendChild(createTermRow(t.operator, t.term));
+    }
+    if (interval) {
+      intervalSelect.value = String(interval);
+    }
+  }
+
+  // Get current search terms from the UI
+  function getSearchTerms() {
+    const terms = [];
+    const rows = termsBuilder.querySelectorAll('.term-row');
+    rows.forEach((row, i) => {
+      const input = row.querySelector('input[type="text"]');
+      const opSelect = row.querySelector('.operator-select');
+      const term = input ? input.value.trim() : '';
+      if (term) {
+        terms.push({
+          term,
+          operator: (i === 0) ? null : (opSelect ? opSelect.value : 'AND')
+        });
+      }
+    });
+    return terms;
+  }
+
+  // Build a display string from searchTerms
+  function searchTermsToDisplayText(searchTerms) {
+    return searchTerms.map((t, i) => {
+      if (i === 0) return t.term;
+      return `${t.operator} ${t.term}`;
+    }).join(' ');
+  }
+
+  addTermBtn.addEventListener('click', () => {
+    termsBuilder.appendChild(createTermRow('AND', ''));
+    const newInput = termsBuilder.lastElementChild.querySelector('input[type="text"]');
+    if (newInput) newInput.focus();
+  });
+
+  initTermsBuilder();
 
   // Get current tab info
   async function loadCurrentTab() {
@@ -43,10 +190,19 @@ document.addEventListener('DOMContentLoaded', () => {
         addBtn.disabled = false;
         addBtn.textContent = tabMonitorCount > 0 ? 'Add Another Monitor' : 'Start Monitoring';
         
-        // Only focus on initial load, not on subsequent updates
-        if (!initialFocusDone && !searchTextInput.value) {
-          searchTextInput.focus();
+        // Only auto-populate on initial load
+        if (!initialFocusDone) {
           initialFocusDone = true;
+          loadSearchConfig(currentTabUrl, (config) => {
+            if (config && config.searchTerms && config.searchTerms.length > 0) {
+              populateTerms(config.searchTerms, config.interval);
+              savedConfigHint.textContent = '💾 Restored last search config for this URL';
+              savedConfigHint.style.display = 'block';
+            }
+            // Focus the first input
+            const firstInput = termsBuilder.querySelector('input[type="text"]');
+            if (firstInput) firstInput.focus();
+          });
         }
       });
     } catch (err) {
@@ -58,9 +214,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Start monitoring function
   async function startMonitoring() {
-    const searchText = searchTextInput.value.trim();
-    if (!searchText) {
-      alert('Please enter a search text!');
+    const searchTerms = getSearchTerms();
+    if (searchTerms.length === 0) {
+      alert('Please enter at least one search term!');
       return;
     }
     
@@ -70,14 +226,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     const interval = parseInt(intervalSelect.value);
+    const displayText = searchTermsToDisplayText(searchTerms);
     
-    console.log('Starting monitor for tab:', currentTabId, 'searchText:', searchText);
+    console.log('Starting monitor for tab:', currentTabId, 'searchTerms:', searchTerms);
+    
+    // Save config for this URL
+    saveSearchConfig(currentTabUrl, searchTerms, interval);
+    savedConfigHint.style.display = 'none';
     
     // Start monitoring
     chrome.runtime.sendMessage({
       action: 'startMonitoring',
       tabId: currentTabId,
-      searchText: searchText,
+      searchText: displayText,
+      searchTerms: searchTerms,
       refreshInterval: interval,
       url: currentTabUrl,
       title: currentTabTitle
@@ -89,22 +251,15 @@ document.addEventListener('DOMContentLoaded', () => {
       loadCurrentTab();
       loadMonitors();
       
-      // Clear input for next entry
-      searchTextInput.value = '';
-      searchTextInput.focus();
+      // Reset to single empty term for next entry
+      initTermsBuilder();
+      const firstInput = termsBuilder.querySelector('input[type="text"]');
+      if (firstInput) firstInput.focus();
     });
   }
 
   // Add current tab to monitoring on button click
   addBtn.addEventListener('click', startMonitoring);
-
-  // Start monitoring on Enter key in search text input
-  searchTextInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      startMonitoring();
-    }
-  });
 
   // Stop all monitoring
   stopAllBtn.addEventListener('click', () => {
@@ -158,16 +313,16 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Tab header
         html += `<div class="tab-group">`;
+        const faviconUrl = firstMonitor.url ? `https://www.google.com/s2/favicons?domain=${new URL(firstMonitor.url).hostname}&sz=16` : '';
+        const faviconImg = faviconUrl ? `<img src="${faviconUrl}" width="16" height="16" style="vertical-align: middle; margin-right: 6px; border-radius: 2px;">` : '🌐 ';
         html += `<div class="tab-header" title="${escapeHtml(firstMonitor.url || '')}">
-          🌐 ${escapeHtml(displayUrl)}
+          ${faviconImg}${escapeHtml(displayUrl)}
         </div>`;
         
         // Individual monitors for this tab
         for (const monitor of tabMonitors) {
           const isFound = monitor.found;
           const isIncognito = monitor.isIncognito;
-          const cycleCount = monitor.incognitoCycleCount || 0;
-          const inBackoff = monitor.inBackoff || false;
           
           let countdownText = '';
           if (isFound && monitor.foundAt) {
@@ -176,18 +331,16 @@ document.addEventListener('DOMContentLoaded', () => {
           } else if (!isFound && monitor.nextRefreshTime) {
             const remaining = Math.max(0, Math.ceil((monitor.nextRefreshTime - Date.now()) / 1000));
             if (remaining > 0) {
-              countdownText = inBackoff ? `⏳ Backoff ${remaining}s` : `⏱️ ${remaining}s`;
+              countdownText = `⏱️ ${remaining}s`;
             } else {
               countdownText = '🔄 Refreshing...';
             }
           }
           
-          // InPrivate badge - show when in InPrivate mode (even when found)
+          // InPrivate badge - show when in InPrivate mode
           let inPrivateBadge = '';
           if (isIncognito) {
-            inPrivateBadge = `<span class="monitor-status inprivate-badge">${cycleCount > 1 ? `🕵️ #${cycleCount}` : '🕵️ InPrivate'}</span>`;
-          } else if (inBackoff) {
-            inPrivateBadge = `<span class="monitor-status inprivate-badge">⏳ Backoff #${cycleCount}</span>`;
+            inPrivateBadge = `<span class="monitor-status inprivate-badge">🕵️ InPrivate</span>`;
           }
           
           // Found badge - only show when text is found

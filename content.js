@@ -3,6 +3,26 @@
 let activeMonitors = {}; // { monitorId: { searchText, ... } }
 let foundMonitors = new Set(); // Track which monitors have already found their text
 
+// Forward console logs to background for the dashboard log viewer
+function wdLog(...args) {
+  const level = (typeof args[args.length - 1] === 'string' && ['info', 'warn', 'error'].includes(args[args.length - 1]) && args.length > 1)
+    ? args.pop() : 'info';
+  const message = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+  const prefix = '[WatchDog] ';
+  if (level === 'error') console.error(prefix + message);
+  else if (level === 'warn') console.warn(prefix + message);
+  else console.log(prefix + message);
+  try {
+    chrome.runtime.sendMessage({
+      action: 'appendLog',
+      message,
+      source: 'content',
+      level,
+      timestamp: Date.now()
+    });
+  } catch (e) { /* extension context may be invalidated */ }
+}
+
 // Error page detection patterns
 const ERROR_PATTERNS = [
   "can't reach this page",
@@ -36,14 +56,14 @@ function isErrorPage() {
   // Check for error patterns in page content or title
   for (const pattern of ERROR_PATTERNS) {
     if (pageTextLower.includes(pattern) || titleLower.includes(pattern)) {
-      console.log('[WatchDog] Detected error page pattern:', pattern);
+      wdLog('Detected error page pattern:', pattern);
       return true;
     }
   }
   
   // Check for very minimal page content (often indicates error)
   if (pageText.length < 200 && (pageTextLower.includes('error') || pageTextLower.includes('denied'))) {
-    console.log('[WatchDog] Detected minimal page with error keywords');
+    wdLog('Detected minimal page with error keywords');
     return true;
   }
   
@@ -77,13 +97,13 @@ function isUrlRedirected() {
     const currentBase = current.origin + current.pathname.replace(/\/$/, '');
     
     if (originalBase !== currentBase) {
-      console.log('[WatchDog] URL redirected from:', originalBase, 'to:', currentBase);
+      wdLog('URL redirected from:', originalBase, 'to:', currentBase);
       return true;
     }
   } catch (e) {
     // If URL parsing fails, do string comparison
     if (originalUrl !== currentUrl) {
-      console.log('[WatchDog] URL changed from:', originalUrl, 'to:', currentUrl);
+      wdLog('URL changed from:', originalUrl, 'to:', currentUrl);
       return true;
     }
   }
@@ -91,16 +111,51 @@ function isUrlRedirected() {
   return false;
 }
 
+// Evaluate AND/OR search terms against page text
+// Standard precedence: AND binds tighter than OR
+// "A OR B AND C" => "A OR (B AND C)"
+function evaluateSearchTerms(searchTerms, pageTextLower) {
+  if (!searchTerms || searchTerms.length === 0) return false;
+
+  // If only a single term (legacy or simple), just check inclusion
+  if (searchTerms.length === 1) {
+    return pageTextLower.includes(searchTerms[0].term.toLowerCase());
+  }
+
+  // Split into OR-groups (each group is a set of AND-connected terms)
+  const orGroups = [];
+  let currentGroup = [];
+
+  for (const entry of searchTerms) {
+    if (entry.operator === 'OR' && currentGroup.length > 0) {
+      orGroups.push(currentGroup);
+      currentGroup = [];
+    }
+    currentGroup.push(entry.term);
+  }
+  if (currentGroup.length > 0) {
+    orGroups.push(currentGroup);
+  }
+
+  // Any OR group fully matching means success
+  for (const group of orGroups) {
+    const allMatch = group.every(term => pageTextLower.includes(term.toLowerCase()));
+    if (allMatch) return true;
+  }
+
+  return false;
+}
+
 function checkAllMonitors() {
   if (Object.keys(activeMonitors).length === 0) {
-    console.log('[WatchDog] No active monitors for this tab');
+    wdLog('No active monitors for this tab');
     return;
   }
   
   const pageText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
   
   if (!pageText) {
-    console.log('[WatchDog] No page text found');
+    wdLog('No page text found');
     chrome.runtime.sendMessage({ action: 'scheduleRefresh' });
     return;
   }
@@ -109,7 +164,7 @@ function checkAllMonitors() {
   // If so, redirect back to original URL instead of triggering error fallback
   if (isUrlRedirected()) {
     const originalUrl = getOriginalUrl();
-    console.log('[WatchDog] 🔄 URL redirected, navigating back to original:', originalUrl);
+    wdLog('🔄 URL redirected, navigating back to original:', originalUrl);
     chrome.runtime.sendMessage({ 
       action: 'urlRedirected',
       originalUrl: originalUrl,
@@ -119,8 +174,9 @@ function checkAllMonitors() {
   }
   
   // Check if this is an error page (throttling, network error, etc.)
+  // Just schedule a retry - the page will be refreshed on the next cycle
   if (isErrorPage()) {
-    console.log('[WatchDog] 🚫 Error page detected, requesting InPrivate fallback...');
+    wdLog('🚫 Error page detected, scheduling retry...');
     chrome.runtime.sendMessage({ 
       action: 'errorPageDetected',
       url: window.location.href
@@ -135,11 +191,21 @@ function checkAllMonitors() {
   for (const [monitorId, monitor] of Object.entries(activeMonitors)) {
     if (foundMonitors.has(monitorId)) continue;
     
+    const searchTerms = monitor.searchTerms;
     const searchText = monitor.searchText;
-    console.log('[WatchDog] Checking for:', searchText);
+    let isMatch = false;
+
+    if (searchTerms && searchTerms.length > 0) {
+      wdLog('Evaluating terms:', searchTerms.map(t => `${t.operator || ''} "${t.term}"`).join(' '));
+      isMatch = evaluateSearchTerms(searchTerms, pageTextLower);
+    } else {
+      // Legacy fallback: single searchText string
+      wdLog('Checking for:', searchText);
+      isMatch = pageTextLower.includes(searchText.toLowerCase());
+    }
     
-    if (pageTextLower.includes(searchText.toLowerCase())) {
-      console.log('[WatchDog] 🎉 FOUND:', searchText);
+    if (isMatch) {
+      wdLog('🎉 FOUND:', searchText);
       foundMonitors.add(monitorId);
       anyFound = true;
       
@@ -162,10 +228,10 @@ function checkAllMonitors() {
   const remainingMonitors = Object.keys(activeMonitors).filter(id => !foundMonitors.has(id));
   
   if (remainingMonitors.length > 0) {
-    console.log('[WatchDog] Still looking for', remainingMonitors.length, 'items, scheduling refresh...');
+    wdLog('Still looking for', remainingMonitors.length, 'items, scheduling refresh...');
     chrome.runtime.sendMessage({ action: 'scheduleRefresh' });
   } else {
-    console.log('[WatchDog] All monitors found or none active');
+    wdLog('All monitors found or none active');
   }
 }
 
@@ -182,12 +248,12 @@ function playLocalSound() {
     localAudio.volume = 1.0;
     
     localAudio.play().then(() => {
-      console.log('[WatchDog] Local audio is playing!');
+      wdLog('Local audio is playing!');
     }).catch(e => {
-      console.log('[WatchDog] Local audio play failed:', e);
+      wdLog('Local audio play failed:', e);
     });
   } catch (e) {
-    console.log('[WatchDog] Local sound failed:', e);
+    wdLog('Local sound failed:', e);
   }
 }
 
@@ -200,7 +266,7 @@ function stopLocalSound() {
 }
 
 function dismissAlert() {
-  console.log('[WatchDog] Dismissing alert...');
+  wdLog('Dismissing alert...');
   stopLocalSound();
   chrome.runtime.sendMessage({ action: 'stopAlarm' });
   
@@ -208,7 +274,7 @@ function dismissAlert() {
   document.querySelectorAll('.watchdog-alert-overlay').forEach(el => el.remove());
   document.querySelectorAll('.watchdog-alert-style').forEach(el => el.remove());
   
-  console.log('[WatchDog] Alert dismissed');
+  wdLog('Alert dismissed');
 }
 
 function showVisualAlert(searchText, monitorId) {
@@ -387,26 +453,26 @@ function showVisualAlert(searchText, monitorId) {
 function init() {
   chrome.runtime.sendMessage({ action: 'getStatus' }, (response) => {
     if (chrome.runtime.lastError) {
-      console.log('[WatchDog] Could not get status:', chrome.runtime.lastError.message);
+      wdLog('Could not get status:', chrome.runtime.lastError.message);
       return;
     }
     
     if (!response) {
-      console.log('[WatchDog] No response from background');
+      wdLog('No response from background');
       return;
     }
     
-    console.log('[WatchDog] Got status:', response);
+    wdLog('Got status:', response);
     
     if (!response.isMonitored || !response.monitors) {
-      console.log('[WatchDog] This tab is not being monitored');
+      wdLog('This tab is not being monitored');
       return;
     }
     
     activeMonitors = response.monitors;
     foundMonitors = new Set();
     
-    console.log('[WatchDog] Monitoring for', Object.keys(activeMonitors).length, 'search terms');
+    wdLog('Monitoring for', Object.keys(activeMonitors).length, 'search terms');
     
     // Wait for page to fully load, then check
     if (document.readyState === 'complete') {
@@ -426,7 +492,7 @@ if (chrome.runtime && chrome.runtime.id) {
   // Listen for dismiss commands from background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'dismissOverlay') {
-      console.log('[WatchDog] Received dismissOverlay command');
+      wdLog('Received dismissOverlay command');
       stopLocalSound();
       
       document.querySelectorAll('.watchdog-alert-overlay').forEach(el => el.remove());
