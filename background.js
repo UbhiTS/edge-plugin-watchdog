@@ -8,10 +8,8 @@ const refreshTimers = new Map();
 // Tabs being intentionally closed for InPrivate session reset (don't clean up monitors)
 const tabsBeingReset = new Set();
 
-// InPrivate session reset cooldown to prevent close/reopen loops
-let lastInPrivateResetTime = 0;
-const INPRIVATE_RESET_COOLDOWN_MS = 60000; // Minimum 60 seconds between full resets
-const INPRIVATE_RESET_ERROR_THRESHOLD = 3; // Consecutive errors before attempting a full reset
+// InPrivate session reset delay before reopening windows
+const INPRIVATE_RESET_DELAY_MS = 5000; // Wait 5 seconds for session destruction before reopening
 
 // Watchdog timer to detect stuck refreshes
 let stuckWatchdogTimer = null;
@@ -228,36 +226,11 @@ async function handleErrorPageRetry(tabId, url) {
   const isIncognito = firstMonitor?.isIncognito || false;
   
   if (isIncognito) {
-    // Track consecutive errors for this tab's monitors
-    const allMon = await getMonitors();
-    let maxConsecutiveErrors = 0;
-    for (const id of Object.keys(activeTabMonitors)) {
-      if (allMon[id]) {
-        allMon[id].consecutiveErrors = (allMon[id].consecutiveErrors || 0) + 1;
-        maxConsecutiveErrors = Math.max(maxConsecutiveErrors, allMon[id].consecutiveErrors);
-        wdLog('Consecutive errors for monitor', id, ':', allMon[id].consecutiveErrors);
-      }
-    }
-    await saveMonitors(allMon);
-
-    // Check if we should do a full InPrivate session reset or just schedule a normal retry
-    const now = Date.now();
-    const cooldownActive = (now - lastInPrivateResetTime) < INPRIVATE_RESET_COOLDOWN_MS;
-    const belowThreshold = maxConsecutiveErrors < INPRIVATE_RESET_ERROR_THRESHOLD;
-
-    if (cooldownActive || belowThreshold) {
-      const reason = cooldownActive ? 'cooldown active' : `only ${maxConsecutiveErrors}/${INPRIVATE_RESET_ERROR_THRESHOLD} consecutive errors`;
-      wdLog('InPrivate error on tab', tabId, '- skipping full reset (' + reason + '), scheduling normal retry');
-      await scheduleRefreshForTab(tabId);
-      return { status: 'retrying', reason };
-    }
-
-    lastInPrivateResetTime = now;
-
+    // Immediately reset all InPrivate windows for a fresh session on any error.
     // All InPrivate windows share one session - must close ALL to truly reset.
     // Collect every InPrivate monitor, snapshot each window's size/position, then
     // close all InPrivate windows and reopen them all at the same geometry.
-    wdLog('Error in InPrivate tab', tabId, '- resetting ALL InPrivate windows for fresh session (after', maxConsecutiveErrors, 'consecutive errors)');
+    wdLog('Error in InPrivate tab', tabId, '- resetting ALL InPrivate windows for fresh session');
     
     // 1) Find all InPrivate monitors
     const allMonitors = await getMonitors();
@@ -320,8 +293,9 @@ async function handleErrorPageRetry(tabId, url) {
       }
     }
     
-    // Small delay to let all windows fully close (session destruction)
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    // Wait for session destruction before reopening
+    wdLog('Waiting', INPRIVATE_RESET_DELAY_MS / 1000, 'seconds for session destruction...');
+    await new Promise(resolve => setTimeout(resolve, INPRIVATE_RESET_DELAY_MS));
     
     // 4) Reopen each window at its original size/position
     const updatedMonitors = await getMonitors();
@@ -1042,7 +1016,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         if (changed) await saveMonitors(monitors);
         
-        await scheduleRefreshForTab(senderTabId);
         await scheduleRefreshForTab(senderTabId);
       }
       sendResponse({ status: 'scheduled' });
