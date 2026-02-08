@@ -19,7 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let updateInterval = null;
   let autoScroll = true;
-  let lastLogCount = 0;
+  let lastLogTimestamp = 0;
   let loggingEnabled = true;
   let consoleCollapsed = false;
 
@@ -116,7 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
   clearLogsBtn.addEventListener('click', () => {
     chrome.runtime.sendMessage({ action: 'clearLogs' }, () => {
       consoleBody.innerHTML = '<div class="no-logs">Logs cleared.</div>';
-      lastLogCount = 0;
+      lastLogTimestamp = 0;
     });
   });
 
@@ -132,16 +132,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const logs = allLogs.length > MAX_DISPLAY_LOGS ? allLogs.slice(-MAX_DISPLAY_LOGS) : allLogs;
 
       if (logs.length === 0) {
-        if (lastLogCount !== 0) {
+        if (lastLogTimestamp !== 0) {
           consoleBody.innerHTML = '<div class="no-logs">No logs yet. Logs will appear as the extension runs.</div>';
-          lastLogCount = 0;
+          lastLogTimestamp = 0;
         }
         return;
       }
 
-      // Only re-render if log count changed
-      if (allLogs.length === lastLogCount) return;
-      lastLogCount = allLogs.length;
+      // Only re-render if logs actually changed (compare last entry's timestamp)
+      const newestTimestamp = logs[logs.length - 1].timestamp;
+      if (newestTimestamp === lastLogTimestamp && logs.length === allLogs.length) return;
+      lastLogTimestamp = newestTimestamp;
 
       let html = '';
       for (const entry of logs) {
@@ -159,7 +160,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   logFilter.addEventListener('change', () => {
-    lastLogCount = 0; // Force re-render
+    lastLogTimestamp = 0; // Force re-render
     loadLogs();
   });
 

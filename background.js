@@ -8,6 +8,11 @@ const refreshTimers = new Map();
 // Tabs being intentionally closed for InPrivate session reset (don't clean up monitors)
 const tabsBeingReset = new Set();
 
+// InPrivate session reset cooldown to prevent close/reopen loops
+let lastInPrivateResetTime = 0;
+const INPRIVATE_RESET_COOLDOWN_MS = 60000; // Minimum 60 seconds between full resets
+const INPRIVATE_RESET_ERROR_THRESHOLD = 3; // Consecutive errors before attempting a full reset
+
 // Watchdog timer to detect stuck refreshes
 let stuckWatchdogTimer = null;
 const STUCK_THRESHOLD_MS = 30000; // Consider stuck if 30 seconds past expected refresh
@@ -167,10 +172,36 @@ async function handleErrorPageRetry(tabId, url) {
   const isIncognito = firstMonitor?.isIncognito || false;
   
   if (isIncognito) {
+    // Track consecutive errors for this tab's monitors
+    const allMon = await getMonitors();
+    let maxConsecutiveErrors = 0;
+    for (const id of Object.keys(activeTabMonitors)) {
+      if (allMon[id]) {
+        allMon[id].consecutiveErrors = (allMon[id].consecutiveErrors || 0) + 1;
+        maxConsecutiveErrors = Math.max(maxConsecutiveErrors, allMon[id].consecutiveErrors);
+        wdLog('Consecutive errors for monitor', id, ':', allMon[id].consecutiveErrors);
+      }
+    }
+    await saveMonitors(allMon);
+
+    // Check if we should do a full InPrivate session reset or just schedule a normal retry
+    const now = Date.now();
+    const cooldownActive = (now - lastInPrivateResetTime) < INPRIVATE_RESET_COOLDOWN_MS;
+    const belowThreshold = maxConsecutiveErrors < INPRIVATE_RESET_ERROR_THRESHOLD;
+
+    if (cooldownActive || belowThreshold) {
+      const reason = cooldownActive ? 'cooldown active' : `only ${maxConsecutiveErrors}/${INPRIVATE_RESET_ERROR_THRESHOLD} consecutive errors`;
+      wdLog('InPrivate error on tab', tabId, '- skipping full reset (' + reason + '), scheduling normal retry');
+      await scheduleRefreshForTab(tabId);
+      return { status: 'retrying', reason };
+    }
+
+    lastInPrivateResetTime = now;
+
     // All InPrivate windows share one session - must close ALL to truly reset.
     // Collect every InPrivate monitor, snapshot each window's size/position, then
     // close all InPrivate windows and reopen them all at the same geometry.
-    wdLog('Error in InPrivate tab', tabId, '- resetting ALL InPrivate windows for fresh session');
+    wdLog('Error in InPrivate tab', tabId, '- resetting ALL InPrivate windows for fresh session (after', maxConsecutiveErrors, 'consecutive errors)');
     
     // 1) Find all InPrivate monitors
     const allMonitors = await getMonitors();
@@ -277,11 +308,12 @@ async function handleErrorPageRetry(tabId, url) {
 
           wdLog('Reopened InPrivate window at', JSON.stringify(useGeometry), 'with tab:', newTabId);
           
-          // Update monitors to point to the new tab
+          // Update monitors to point to the new tab and reset error counters
           for (const { id, monitor } of tabInfo.monitors) {
             if (updatedMonitors[id]) {
               updatedMonitors[id].tabId = newTabId;
               updatedMonitors[id].nextRefreshTime = Date.now() + (monitor.interval * 1000) + 3000;
+              updatedMonitors[id].consecutiveErrors = 0;
             }
           }
           
@@ -911,6 +943,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       const senderTabId = sender.tab ? sender.tab.id : null;
       if (senderTabId) {
+        // Page loaded successfully - reset consecutive error counters for this tab's monitors
+        const monitors = await getMonitors();
+        let changed = false;
+        for (const [id, monitor] of Object.entries(monitors)) {
+          if (monitor.tabId === senderTabId && monitor.consecutiveErrors > 0) {
+            monitors[id].consecutiveErrors = 0;
+            changed = true;
+          }
+        }
+        if (changed) await saveMonitors(monitors);
+        
+        await scheduleRefreshForTab(senderTabId);
         await scheduleRefreshForTab(senderTabId);
       }
       sendResponse({ status: 'scheduled' });
@@ -1051,13 +1095,16 @@ chrome.webNavigation.onErrorOccurred.addListener(async (details) => {
     return;
   }
   
-  // Avoid duplicate handling (within 10 seconds)
-  const lastError = recentNavErrors.get(tabId);
-  if (lastError && Date.now() - lastError < 10000) {
-    wdLog('Ignoring duplicate navigation error for tab:', tabId);
+  // Avoid duplicate handling (within 10 seconds) - use URL-based dedup for InPrivate
+  // since tabIds change after a session reset
+  const firstMonitor = Object.values(tabMonitors)[0];
+  const dedupKey = firstMonitor?.isIncognito ? `incognito:${normalizeUrl(firstMonitor.url)}` : `tab:${tabId}`;
+  const lastError = recentNavErrors.get(dedupKey);
+  if (lastError && Date.now() - lastError < 15000) {
+    wdLog('Ignoring duplicate navigation error for:', dedupKey);
     return;
   }
-  recentNavErrors.set(tabId, Date.now());
+  recentNavErrors.set(dedupKey, Date.now());
   
   // Clean up old entries
   for (const [tid, time] of recentNavErrors.entries()) {
