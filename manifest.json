@@ -9,7 +9,8 @@
     "activeTab",
     "scripting",
     "offscreen",
-    "webNavigation"
+    "webNavigation",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
     "<all_urls>"

@@ -32,6 +32,7 @@ function buildMonitorGroupsHtml(monitors, urlMaxLen) {
     for (const monitor of tabMonitors) {
       const isFound = monitor.found;
       const isIncognito = monitor.isIncognito;
+      const isBlockMedia = monitor.blockMedia;
 
       let countdown = '';
       if (isFound && monitor.foundAt) {
@@ -46,6 +47,7 @@ function buildMonitorGroupsHtml(monitors, urlMaxLen) {
           <div class="monitor-header">
             <span class="monitor-search-text">"${escapeHtml(monitor.searchText)}"</span>
             <div class="monitor-badges">
+              ${isBlockMedia ? '<span class="monitor-status" style="background:#ff9800;color:#000;">📵 No Media</span>' : ''}
               ${isIncognito ? '<span class="monitor-status inprivate-badge">🕵️ InPrivate</span>' : ''}
               ${isFound ? '<span class="monitor-status found">🦴 FOUND!</span>' : ''}
             </div>

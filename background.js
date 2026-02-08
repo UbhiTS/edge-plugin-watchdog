@@ -37,6 +37,62 @@ function wdLog(...args) {
   console.log('[WD:background]', ...args);
 }
 
+// --- Media Blocking via declarativeNetRequest ---
+// Resource types to block when blockMedia is enabled
+const BLOCKED_RESOURCE_TYPES = ['image', 'media', 'font', 'object', 'other'];
+
+// Update media-blocking rules for a specific tab based on its monitors
+async function updateMediaBlockingForTab(tabId) {
+  const monitors = await getMonitors();
+  const shouldBlock = Object.values(monitors).some(
+    m => m.tabId === tabId && !m.found && m.blockMedia
+  );
+
+  // Rule ID = tabId (unique per tab)
+  const ruleId = tabId;
+
+  // Always remove old rule for this tab first
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [ruleId]
+    });
+  } catch (e) {
+    // Rule may not exist, safe to ignore
+  }
+
+  if (shouldBlock) {
+    try {
+      await chrome.declarativeNetRequest.updateSessionRules({
+        addRules: [{
+          id: ruleId,
+          priority: 1,
+          action: { type: 'block' },
+          condition: {
+            tabIds: [tabId],
+            resourceTypes: BLOCKED_RESOURCE_TYPES
+          }
+        }]
+      });
+      wdLog('📵 Media blocking enabled for tab', tabId);
+    } catch (e) {
+      wdLog('Failed to add media blocking rule for tab', tabId, ':', e);
+    }
+  } else {
+    wdLog('📵 Media blocking removed for tab', tabId);
+  }
+}
+
+// Remove media-blocking rule for a tab (used on cleanup)
+async function removeMediaBlockingForTab(tabId) {
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [tabId]
+    });
+  } catch (e) {
+    // Safe to ignore
+  }
+}
+
 // Generate unique ID
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -319,6 +375,12 @@ async function handleErrorPageRetry(tabId, url) {
           
           await saveMonitors(updatedMonitors);
           await scheduleRefreshForTab(newTabId);
+          
+          // Apply media blocking for the new tab if any monitor has it enabled
+          const hasBlockMedia = tabInfo.monitors.some(({ id }) => updatedMonitors[id] && updatedMonitors[id].blockMedia);
+          if (hasBlockMedia) {
+            await updateMediaBlockingForTab(newTabId);
+          }
         } catch (e) {
           wdLog('Failed to reopen InPrivate window:', e);
         }
@@ -511,10 +573,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         foundAt: null,
         isIncognito: false,
         incognitoCycleCount: 0,
+        blockMedia: message.blockMedia || false,
         nextRefreshTime: Date.now() + ((message.refreshInterval || 15) * 1000) + 2000
       };
       
       await saveMonitors(monitors);
+      
+      // Apply media blocking if enabled
+      if (message.blockMedia) {
+        await updateMediaBlockingForTab(message.tabId);
+      }
+      
       wdLog('Started monitoring:', monitorId, monitors[monitorId]);
       sendResponse({ status: 'started', monitorId });
     })();
@@ -578,6 +647,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         
         await saveMonitors(monitors);
         
+        // Move media blocking from old tab to new tab
+        await removeMediaBlockingForTab(oldTabId);
+        if (monitor.blockMedia) {
+          await updateMediaBlockingForTab(newTabId);
+        }
+        
         // Clear timer for old tab
         clearTabTimer(oldTabId);
         
@@ -613,6 +688,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         delete monitors[monitorId];
         await saveMonitors(monitors);
         
+        // Update media blocking (may need to remove if no more blockMedia monitors on this tab)
+        await updateMediaBlockingForTab(tabId);
+        
         // Reschedule or clear timer for this tab
         const remaining = await getActiveMonitorsForTab(tabId, monitors);
         if (Object.keys(remaining).length === 0) {
@@ -643,6 +721,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       
       for (const tabId of tabIds) {
         clearTabTimer(tabId);
+        await removeMediaBlockingForTab(tabId);
         try {
           await chrome.tabs.sendMessage(tabId, { action: 'dismissOverlay' });
         } catch (e) {}
@@ -676,6 +755,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           delete monitors[monitorId];
           await saveMonitors(monitors);
           
+          // Update media blocking for this tab
+          await updateMediaBlockingForTab(mTabId);
+          
           try {
             await chrome.tabs.sendMessage(mTabId, { action: 'dismissOverlay', monitorId });
           } catch (e) {}
@@ -695,6 +777,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         }
         await saveMonitors(monitors);
+        
+        // Update media blocking for this tab
+        await updateMediaBlockingForTab(tabId);
         
         try {
           await chrome.tabs.sendMessage(tabId, { action: 'dismissOverlay' });
@@ -800,7 +885,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           interval: m.interval,
           url: m.url,
           title: m.title,
-          isIncognito: m.isIncognito || false
+          isIncognito: m.isIncognito || false,
+          blockMedia: m.blockMedia || false
         }))
       };
       const { savedConfigs = [] } = await chrome.storage.local.get('savedConfigs');
@@ -877,6 +963,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             foundAt: null,
             isIncognito: saved.isIncognito || false,
             incognitoCycleCount: saved.isIncognito ? 1 : 0,
+            blockMedia: saved.blockMedia || false,
             nextRefreshTime: Date.now() + (saved.interval * 1000) + 2000
           };
 
@@ -892,6 +979,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const tabIds = new Set(Object.values(monitors).filter(m => !m.found).map(m => m.tabId));
       for (const tabId of tabIds) {
         await scheduleRefreshForTab(tabId);
+        await updateMediaBlockingForTab(tabId);
       }
 
       wdLog('Config "' + config.name + '" restored:', restoredCount, 'monitor(s)');
@@ -1035,6 +1123,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   if (changed) {
     await saveMonitors(monitors);
     clearTabTimer(tabId);
+    await removeMediaBlockingForTab(tabId);
     stopAlarmSound();
     wdLog('Tab closed, removed', removedUrls.length, 'monitor(s):', removedUrls.join(', '));
   }
@@ -1056,6 +1145,7 @@ chrome.runtime.onStartup.addListener(async () => {
     try {
       await chrome.tabs.get(tabId);
       await scheduleRefreshForTab(tabId);
+      await updateMediaBlockingForTab(tabId);
     } catch (e) {
       // Tab doesn't exist, clean up
       for (const [id, monitor] of Object.entries(monitors)) {

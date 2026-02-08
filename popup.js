@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const historyCount = document.getElementById('historyCount');
   const clearHistoryBtn = document.getElementById('clearHistoryBtn');
   const savedConfigHint = document.getElementById('savedConfigHint');
+  const blockMediaCheckbox = document.getElementById('blockMedia');
 
   let currentTabId = null;
   let currentTabUrl = '';
@@ -48,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const key = normalizeUrl(url);
     chrome.storage.local.get(['urlSearchConfigs'], (result) => {
       const configs = result.urlSearchConfigs || {};
-      configs[key] = { searchTerms, interval, savedAt: Date.now() };
+      configs[key] = { searchTerms, interval, blockMedia: blockMediaCheckbox.checked, savedAt: Date.now() };
       // Keep only the most recent 100 configs
       const keys = Object.keys(configs);
       if (keys.length > 100) {
@@ -133,6 +134,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Populate blockMedia checkbox from a saved config
+  function populateBlockMedia(blockMedia) {
+    blockMediaCheckbox.checked = !!blockMedia;
+  }
+
   // Get current search terms from the UI
   function getSearchTerms() {
     const terms = [];
@@ -196,6 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
           loadSearchConfig(currentTabUrl, (config) => {
             if (config && config.searchTerms && config.searchTerms.length > 0) {
               populateTerms(config.searchTerms, config.interval);
+              populateBlockMedia(config.blockMedia);
               savedConfigHint.textContent = '💾 Restored last search config for this URL';
               savedConfigHint.style.display = 'block';
             }
@@ -227,8 +234,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     const interval = parseInt(intervalSelect.value);
     const displayText = searchTermsToDisplayText(searchTerms);
+    const blockMedia = blockMediaCheckbox.checked;
     
-    console.log('Starting monitor for tab:', currentTabId, 'searchTerms:', searchTerms);
+    console.log('Starting monitor for tab:', currentTabId, 'searchTerms:', searchTerms, 'blockMedia:', blockMedia);
     
     // Save config for this URL
     saveSearchConfig(currentTabUrl, searchTerms, interval);
@@ -242,7 +250,8 @@ document.addEventListener('DOMContentLoaded', () => {
       searchTerms: searchTerms,
       refreshInterval: interval,
       url: currentTabUrl,
-      title: currentTabTitle
+      title: currentTabTitle,
+      blockMedia: blockMedia
     }, () => {
       // Reload the tab to start checking
       chrome.tabs.reload(currentTabId);
