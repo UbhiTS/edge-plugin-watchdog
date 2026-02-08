@@ -16,6 +16,7 @@ const WATCHDOG_CHECK_INTERVAL_MS = 10000; // Check every 10 seconds
 // --- Console Log Capture ---
 const MAX_LOG_ENTRIES = 500;
 let logBuffer = [];
+let loggingEnabled = true;
 
 function trimLogBuffer() {
   if (logBuffer.length > MAX_LOG_ENTRIES) {
@@ -24,6 +25,7 @@ function trimLogBuffer() {
 }
 
 function wdLog(...args) {
+  if (!loggingEnabled) return;
   const message = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
   logBuffer.push({ timestamp: Date.now(), message, source: 'background', level: 'info' });
   trimLogBuffer();
@@ -727,14 +729,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
     
   } else if (message.action === 'appendLog') {
-    logBuffer.push({
-      timestamp: message.timestamp || Date.now(),
-      message: String(message.message || ''),
-      source: message.source || 'content',
-      level: message.level || 'info'
-    });
-    trimLogBuffer();
+    if (loggingEnabled) {
+      logBuffer.push({
+        timestamp: message.timestamp || Date.now(),
+        message: String(message.message || ''),
+        source: message.source || 'content',
+        level: message.level || 'info'
+      });
+      trimLogBuffer();
+    }
     sendResponse({ status: 'ok' });
+    return true;
+
+  } else if (message.action === 'getLoggingEnabled') {
+    sendResponse({ enabled: loggingEnabled });
+    return true;
+
+  } else if (message.action === 'setLoggingEnabled') {
+    loggingEnabled = !!message.enabled;
+    sendResponse({ status: 'ok', enabled: loggingEnabled });
     return true;
     
   } else if (message.action === 'saveConfig') {

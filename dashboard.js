@@ -12,12 +12,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const logFilter = document.getElementById('logFilter');
   const clearLogsBtn = document.getElementById('clearLogsBtn');
   const autoScrollToggle = document.getElementById('autoScrollToggle');
+  const loggingToggle = document.getElementById('loggingToggle');
+  const consoleCollapseBtn = document.getElementById('consoleCollapseBtn');
 
   const resizeHandle = document.getElementById('resizeHandle');
 
   let updateInterval = null;
   let autoScroll = true;
   let lastLogCount = 0;
+  let loggingEnabled = true;
+  let consoleCollapsed = false;
 
   // --- Resize Handle ---
   let isResizing = false;
@@ -49,6 +53,55 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- Console Panel ---
+
+  // Collapse / Expand
+  let preCollapseLoggingState = true;
+
+  consoleCollapseBtn.addEventListener('click', () => {
+    consoleCollapsed = !consoleCollapsed;
+    consolePanel.classList.toggle('collapsed', consoleCollapsed);
+    resizeHandle.classList.toggle('hidden', consoleCollapsed);
+    consoleCollapseBtn.textContent = consoleCollapsed ? '\u25C0' : '\u25B6';
+    consoleCollapseBtn.title = consoleCollapsed ? 'Expand console' : 'Collapse console';
+
+    if (consoleCollapsed) {
+      // Save current logging state and disable
+      preCollapseLoggingState = loggingEnabled;
+      if (loggingEnabled) {
+        loggingEnabled = false;
+        updateLoggingToggleUI();
+        chrome.runtime.sendMessage({ action: 'setLoggingEnabled', enabled: false });
+      }
+    } else {
+      // Restore previous logging state
+      if (preCollapseLoggingState && !loggingEnabled) {
+        loggingEnabled = true;
+        updateLoggingToggleUI();
+        chrome.runtime.sendMessage({ action: 'setLoggingEnabled', enabled: true });
+      }
+    }
+  });
+
+  // Logging toggle
+  chrome.runtime.sendMessage({ action: 'getLoggingEnabled' }, (response) => {
+    if (response) {
+      loggingEnabled = response.enabled;
+      updateLoggingToggleUI();
+    }
+  });
+
+  function updateLoggingToggleUI() {
+    loggingToggle.classList.toggle('active', loggingEnabled);
+    loggingToggle.classList.toggle('inactive', !loggingEnabled);
+    loggingToggle.textContent = loggingEnabled ? '\uD83D\uDCDD On' : '\uD83D\uDCDD Off';
+    loggingToggle.title = loggingEnabled ? 'Logging enabled — click to disable' : 'Logging disabled — click to enable';
+  }
+
+  loggingToggle.addEventListener('click', () => {
+    loggingEnabled = !loggingEnabled;
+    updateLoggingToggleUI();
+    chrome.runtime.sendMessage({ action: 'setLoggingEnabled', enabled: loggingEnabled });
+  });
 
   autoScrollToggle.addEventListener('click', () => {
     autoScroll = !autoScroll;

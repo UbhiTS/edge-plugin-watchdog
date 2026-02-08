@@ -316,6 +316,67 @@
     .auto-scroll-indicator.inactive:hover {
       background: #666;
     }
+
+    /* Logging toggle */
+    .logging-toggle {
+      font-size: 12px;
+      padding: 6px 14px;
+      border-radius: 5px;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+    }
+    .logging-toggle.active {
+      background: #444;
+      color: #76b900;
+    }
+    .logging-toggle.active:hover {
+      background: #666;
+    }
+    .logging-toggle.inactive {
+      background: #ff4444;
+      color: #fff;
+    }
+    .logging-toggle.inactive:hover {
+      background: #ff6666;
+    }
+
+    /* Console collapse */
+    .console-collapse-btn {
+      font-size: 14px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      border: none;
+      background: rgba(255,255,255,0.1);
+      color: #aaa;
+      transition: all 0.2s;
+      line-height: 1;
+    }
+    .console-collapse-btn:hover {
+      background: rgba(255,255,255,0.2);
+      color: #fff;
+    }
+    .panel-console.collapsed {
+      width: 40px !important;
+      min-width: 40px !important;
+    }
+    .panel-console.collapsed .console-header {
+      flex-direction: column;
+      padding: 10px 4px;
+      align-items: center;
+    }
+    .panel-console.collapsed .console-header h2,
+    .panel-console.collapsed .console-actions,
+    .panel-console.collapsed .console-body {
+      display: none;
+    }
+    .panel-console.collapsed .console-collapse-btn {
+      display: block;
+    }
+    .resize-handle.hidden {
+      display: none;
+    }
     /* Saved Configurations */
     .saved-configs-section {
       margin-top: 15px;
@@ -417,6 +478,7 @@
     <div class="resize-handle" id="resizeHandle"></div>
     <div class="panel-console" id="consolePanel">
       <div class="console-header">
+        <button id="consoleCollapseBtn" class="console-collapse-btn" title="Collapse/Expand console">▶</button>
         <h2>🖥️ Console Logs</h2>
         <div class="console-actions">
           <select id="logFilter" class="console-filter">
@@ -424,6 +486,7 @@
             <option value="background">Background</option>
             <option value="content">Content</option>
           </select>
+          <span id="loggingToggle" class="logging-toggle active" title="Toggle logging on/off">📝 On</span>
           <span id="autoScrollToggle" class="auto-scroll-indicator active" title="Toggle auto-scroll">⬇ Auto</span>
           <button id="clearLogsBtn" class="btn btn-secondary">Clear</button>
         </div>
